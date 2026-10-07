@@ -1,0 +1,103 @@
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+}
+
+function json(body: Record<string, unknown>, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  })
+}
+
+function normalizeSchoolId(value: unknown) {
+  return String(value ?? '').trim().toUpperCase().replace(/\s+/g, '')
+}
+
+function isValidSchoolId(value: string) {
+  return /^[A-Z0-9][A-Z0-9._-]{2,31}$/.test(value)
+}
+
+async function internalEmailFor(schoolId: string) {
+  const bytes = new TextEncoder().encode(schoolId)
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  const hash = Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+  return `school-${hash}@auth.library.invalid`
+}
+
+const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
+const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
+const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+
+Deno.serve(async (request) => {
+  if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+  if (request.method !== 'POST') return json({ ok: false, error: { message: 'Only POST requests are supported.' } }, 405)
+
+  if (!supabaseUrl || !anonKey || !serviceRoleKey) {
+    return json({ ok: false, error: { message: 'School ID authentication is not configured on the server.' } }, 500)
+  }
+
+  try {
+    const body = await request.json()
+    const action = body?.action
+    if (action === 'sign-up') return json({ ok: false, error: { message: 'Online member registration is disabled. Ask library staff for desk access.' } }, 403)
+    if (!['sign-in', 'recover'].includes(action)) return json({ ok: false, error: { message: 'Invalid action.' } }, 400)
+    const schoolId = normalizeSchoolId(body?.schoolId)
+    const password = String(body?.password ?? '')
+    const invitation = String(body?.invitation ?? '')
+    if (action === 'recover' && !/^[a-f0-9]{64}$/.test(invitation)) {
+      return json({ ok: false, error: { message: 'A valid staff-issued invitation is required. Contact the library to verify your identity.' } })
+    }
+
+    if (!isValidSchoolId(schoolId)) {
+      return json({ ok: false, error: { message: 'Enter a valid school ID using 3-32 letters, numbers, dots, underscores, or hyphens.' } })
+    }
+    if (password.length < (action === 'sign-in' ? 6 : 12) || password.length > 128) {
+      return json({ ok: false, error: { message: 'New passwords must contain 12–128 characters.' } })
+    }
+    const internalEmail = await internalEmailFor(schoolId)
+    const admin = createClient(supabaseUrl, serviceRoleKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    })
+    const auth = createClient(supabaseUrl, anonKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    })
+    const { data: allowed, error: limitError } = await admin.rpc('allow_school_auth', { p_school_id: schoolId })
+    if (limitError || !allowed) return json({ ok: false, error: { message: 'Too many attempts or authentication unavailable. Try again in 15 minutes.' } }, 429)
+
+    if (action === 'recover') {
+      const { data: userId, error: recoveryError } = await admin.rpc('consume_school_recovery', { p_school_id: schoolId, p_token: invitation })
+      if (recoveryError || !userId) return json({ ok: false, error: { message: 'Invalid or expired recovery invitation.' } })
+      const { error: resetError } = await admin.auth.admin.updateUserById(userId, { password })
+      if (resetError) return json({ ok: false, error: { message: 'Recovery failed. Ask staff for a new invitation.' } })
+    }
+
+    const { data, error: signInError } = await auth.auth.signInWithPassword({
+      email: internalEmail,
+      password,
+    })
+
+    if (signInError || !data.session) {
+      return json({ ok: false, error: { message: 'The school ID or password is incorrect.' } })
+    }
+
+    if (action === 'recover') {
+      const { error: revokeError } = await admin.auth.admin.signOut(data.session.access_token, 'others')
+      if (revokeError) return json({ ok: false, error: { message: 'Password changed, but other sessions could not be revoked. Contact library staff.' } }, 500)
+    }
+
+    return json({
+      ok: true,
+      session: data.session,
+      userId: data.user.id,
+    })
+  } catch (error) {
+    console.error('[school-id-auth] request failed', error instanceof Error ? error.name : 'UnknownError')
+    return json({ ok: false, error: { message: 'School ID authentication could not be completed.' } }, 500)
+  }
+})

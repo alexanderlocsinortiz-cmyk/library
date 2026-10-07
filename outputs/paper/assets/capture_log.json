@@ -1,0 +1,19 @@
+{
+  "method": "Actual local React UI with browser-intercepted synthetic API responses. No live backend accessed.",
+  "requests": [
+    "/auth/v1/token",
+    "/rest/v1/book_copies",
+    "/rest/v1/book_requests",
+    "/rest/v1/books",
+    "/rest/v1/inventory_audits",
+    "/rest/v1/library_members",
+    "/rest/v1/loans",
+    "/rest/v1/profiles",
+    "/rest/v1/reservations",
+    "/rest/v1/rpc/get_circulation_policy",
+    "/rest/v1/rpc/library_analytics",
+    "/rest/v1/rpc/refresh_circulation_statuses",
+    "/rest/v1/rpc/transaction_history"
+  ],
+  "browser_errors": []
+}

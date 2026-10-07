@@ -1,0 +1,82 @@
+[
+  {
+    "figure": 5,
+    "image": "login",
+    "pixels": [
+      1440,
+      1000
+    ]
+  },
+  {
+    "figure": 6,
+    "image": "dashboard",
+    "pixels": [
+      1440,
+      1022
+    ]
+  },
+  {
+    "figure": 7,
+    "image": "public_catalog",
+    "pixels": [
+      1440,
+      1000
+    ]
+  },
+  {
+    "figure": 8,
+    "image": "members",
+    "pixels": [
+      1440,
+      1173
+    ]
+  },
+  {
+    "figure": 9,
+    "image": "circulation",
+    "pixels": [
+      1440,
+      1102
+    ]
+  },
+  {
+    "figure": 10,
+    "image": "reservations",
+    "pixels": [
+      1440,
+      1000
+    ]
+  },
+  {
+    "figure": 11,
+    "image": "requests",
+    "pixels": [
+      1440,
+      1079
+    ]
+  },
+  {
+    "figure": 12,
+    "image": "stock_audit",
+    "pixels": [
+      1440,
+      1000
+    ]
+  },
+  {
+    "figure": 13,
+    "image": "reports",
+    "pixels": [
+      1440,
+      1000
+    ]
+  },
+  {
+    "figure": 14,
+    "image": "transactions",
+    "pixels": [
+      1440,
+      1000
+    ]
+  }
+]

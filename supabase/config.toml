@@ -1,0 +1,12 @@
+[auth]
+enable_signup = false
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+
+[functions.school-id-auth]
+# School ID sign-in and recovery happen before the user has a session JWT.
+# The function performs its own input validation and delegates password
+# verification to Supabase Auth.
+verify_jwt = false
