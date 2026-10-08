@@ -2,11 +2,13 @@ import { CirculationHealth } from './CirculationHealth'
 import { usePagination } from './Pagination'
 import { fetchAllRows } from '../lib/paging'
 import { useEffect, useState } from 'react'
+import { Dialog, DialogContent, DialogTitle } from '@mui/material'
 import { supabase } from '../lib/supabase'
 import { defaultCirculationPolicy, formatFine, normalizeCirculationPolicy } from '../lib/circulation'
 import { ConfirmDialog } from './ConfirmDialog'
 
 const emptyBook = { title: '', author: '', isbn: '', category: '', course_subject: '', publication_year: '' }
+const emptyCopy = { book_id: '', barcode: '', location: '', condition: 'good' }
 
 function ToolHeader({ eyebrow, title, description, onBack }) {
   return (
@@ -21,17 +23,61 @@ function ToolHeader({ eyebrow, title, description, onBack }) {
   )
 }
 
+function PhysicalCopyFields({ books, copy, setCopy }) {
+  return <>
+    <label>Book
+      <select value={copy.book_id} onChange={(event) => setCopy((current) => ({ ...current, book_id: event.target.value }))} required>
+        <option value="">Select a book</option>
+        {books.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}
+      </select>
+    </label>
+    <label>Barcode<input value={copy.barcode} onChange={(event) => setCopy((current) => ({ ...current, barcode: event.target.value }))} required /></label>
+    <div className="form-row">
+      <label>Location<input value={copy.location} onChange={(event) => setCopy((current) => ({ ...current, location: event.target.value }))} placeholder="Library shelf" /></label>
+      <label>Condition<select value={copy.condition} onChange={(event) => setCopy((current) => ({ ...current, condition: event.target.value }))}><option value="good">Good</option><option value="new">New</option><option value="worn">Worn</option></select></label>
+    </div>
+  </>
+}
+
 export function StaffCatalogManager({ onBack, view = 'books' }) {
   const [books, setBooks] = useState([])
   const [book, setBook] = useState(emptyBook)
   const [editingBookId, setEditingBookId] = useState('')
-  const [copy, setCopy] = useState({ book_id: '', barcode: '', location: '', condition: 'good' })
+  const [bookDialogOpen, setBookDialogOpen] = useState(false)
+  const [copyDialogOpen, setCopyDialogOpen] = useState(false)
+  const [bookSearch, setBookSearch] = useState('')
+  const [bookAvailability, setBookAvailability] = useState('all')
+  const [bookPage, setBookPage] = useState(1)
+  const [copy, setCopy] = useState(emptyCopy)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [pendingDelete, setPendingDelete] = useState(null)
   const copyCount = books.reduce((total, item) => total + (item.book_copies?.length ?? 0), 0)
+  const filteredBookTitles = books.filter((item) => {
+    const searchText = `${item.title || ''} ${item.author || ''} ${item.isbn || ''} ${item.course_subject || ''} ${item.category || ''}`.toLowerCase()
+    const available = (item.book_copies || []).some((itemCopy) => itemCopy.status === 'available')
+    return searchText.includes(bookSearch.trim().toLowerCase())
+      && (bookAvailability === 'all' || (bookAvailability === 'available' && available) || (bookAvailability === 'unavailable' && !available))
+  })
+  const bookPageSize = 6
+  const bookPageCount = Math.max(1, Math.ceil(filteredBookTitles.length / bookPageSize))
+  const activeBookPage = Math.min(bookPage, bookPageCount)
+  const firstBookIndex = (activeBookPage - 1) * bookPageSize
+  const bookPageItems = filteredBookTitles.slice(firstBookIndex, firstBookIndex + bookPageSize)
+  const firstBookNumber = filteredBookTitles.length === 0 ? 0 : firstBookIndex + 1
+  const lastBookNumber = Math.min(activeBookPage * bookPageSize, filteredBookTitles.length)
+  const firstVisiblePage = Math.max(1, Math.min(activeBookPage - 2, bookPageCount - 4))
+  const visibleBookPages = Array.from(
+    { length: Math.min(bookPageCount, 5) },
+    (_, index) => firstVisiblePage + index,
+  )
+  const bookFiltersActive = Boolean(bookSearch.trim()) || bookAvailability !== 'all'
+  const clearBookFilters = () => {
+    setBookSearch('')
+    setBookAvailability('all')
+  }
 
   const loadBooks = async () => {
     if (!supabase) {
@@ -56,6 +102,7 @@ export function StaffCatalogManager({ onBack, view = 'books' }) {
   }
 
   useEffect(() => { loadBooks() }, [])
+  useEffect(() => { setBookPage(1) }, [bookSearch, bookAvailability])
 
   const addBook = async (event) => {
     event.preventDefault()
@@ -75,6 +122,8 @@ export function StaffCatalogManager({ onBack, view = 'books' }) {
         setMessage(editingBookId ? 'Book details updated.' : 'Book added to the catalog.')
         setBook(emptyBook)
         setEditingBookId('')
+        setBookDialogOpen(false)
+        setBookPage(1)
         await loadBooks()
       }
     } catch (saveError) {
@@ -88,14 +137,37 @@ export function StaffCatalogManager({ onBack, view = 'books' }) {
   const startEditing = (item) => {
     setEditingBookId(item.id)
     setBook({ title: item.title || '', author: item.author || '', isbn: item.isbn || '', category: item.category || '', course_subject: item.course_subject || '', publication_year: item.publication_year || '' })
-    setMessage('Editing this book record.')
+    setBookDialogOpen(true)
+    setMessage('')
     setError('')
   }
 
   const cancelEditing = () => {
     setEditingBookId('')
     setBook(emptyBook)
+    setBookDialogOpen(false)
     setMessage('')
+  }
+
+  const openAddBook = () => {
+    setEditingBookId('')
+    setBook(emptyBook)
+    setMessage('')
+    setError('')
+    setBookDialogOpen(true)
+  }
+
+  const openAddCopy = () => {
+    setCopy(emptyCopy)
+    setMessage('')
+    setError('')
+    setCopyDialogOpen(true)
+  }
+
+  const cancelAddCopy = () => {
+    setCopy(emptyCopy)
+    setCopyDialogOpen(false)
+    setError('')
   }
 
   const deleteBook = async (bookId) => {
@@ -104,9 +176,10 @@ export function StaffCatalogManager({ onBack, view = 'books' }) {
     setError('')
     try {
       const { error: deleteError } = await supabase.rpc('delete_book_record', { p_book_id: bookId })
-      if (deleteError) setError('Unable to delete this book. Loan history or active reservations may still exist.')
+      if (deleteError) setError('Unable to delete this book. Borrowing history or active reservations may still exist.')
       else {
         setMessage('Book deleted from the catalog.')
+        setBookPage(1)
         if (editingBookId === bookId) cancelEditing()
         await loadBooks()
       }
@@ -121,83 +194,185 @@ export function StaffCatalogManager({ onBack, view = 'books' }) {
 
   const addCopy = async (event) => {
     event.preventDefault()
+    const barcode = copy.barcode.trim()
+    if (!copy.book_id || !barcode) {
+      setError('Select a book and enter a barcode to add a copy.')
+      return
+    }
+    const normalizedBarcode = barcode.toLocaleLowerCase()
+    const duplicateBarcode = books.some((item) => (item.book_copies || []).some((itemCopy) => (itemCopy.barcode || '').trim().toLocaleLowerCase() === normalizedBarcode))
+    if (duplicateBarcode) {
+      setError('A physical copy with this barcode already exists.')
+      return
+    }
     setSaving(true)
     setMessage('')
     setError('')
     try {
-      const { error: insertError } = await supabase.from('book_copies').insert(copy)
-      if (insertError) setError('Unable to add the physical copy. Check the barcode and try again.')
+      const { error: insertError } = await supabase.from('book_copies').insert({ ...copy, barcode, location: copy.location.trim() })
+      if (insertError) {
+        const duplicateError = insertError.code === '23505' || /duplicate|unique/i.test(insertError.message || '')
+        setError(duplicateError ? 'A physical copy with this barcode already exists.' : 'Unable to add the physical copy. Check the form and try again.')
+      }
       else {
         setMessage('Physical copy added.')
-        setCopy({ book_id: '', barcode: '', location: '', condition: 'good' })
+        setCopy(emptyCopy)
+        setCopyDialogOpen(false)
         await loadBooks()
       }
     } catch (saveError) {
       if (import.meta.env.DEV) console.error('[staff catalog] save copy failed', saveError)
-      setError('Unable to add the physical copy. Check the barcode and try again.')
+      setError('Unable to add the physical copy. Check the form and try again.')
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <section className="content-section">
-      <ToolHeader
-        eyebrow={view === 'copies' ? 'Library inventory' : 'Catalog management'}
-        title={view === 'copies' ? 'Physical copies' : 'Books'}
-        description={view === 'copies' ? 'Register physical copies and review their current status.' : 'Create book records and register physical copies.'}
+    <section className={view === 'books' ? 'content-section book-management-section' : 'content-section'}>
+      {view === 'books' ? <header className="book-page-header-card">
+        <div className="book-page-header-copy">
+          <span className="eyebrow">Catalog management</span>
+          <h2>Books</h2>
+          <p>Manage book titles in the library catalog.</p>
+        </div>
+        {onBack && <button type="button" className="book-page-header-back" onClick={onBack}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /><path d="M20 12H9" /></svg>
+          <span>Back to dashboard</span>
+        </button>}
+      </header> : <ToolHeader
+        eyebrow="Library inventory"
+        title="Physical copies"
+        description="Register physical copies and review their current status."
         onBack={onBack}
-      />
-      {(message || error) && <div role={error ? 'alert' : 'status'} className={error ? 'inline-error with-action' : 'inline-success'}><span>{error || message}</span>{error && <button type="button" className="retry-button" onClick={loadBooks}>Try again</button>}</div>}
-      <div className={view === 'books' ? 'form-grid two-column' : 'form-grid one-column'}>
-        {view === 'books' && (
-        <form className="tool-form" onSubmit={addBook}>
-          <h3>{editingBookId ? 'Edit book title' : 'Add book title'}</h3>
-          <label>Edit existing record <span className="label-note">optional</span><select value={editingBookId} onChange={(event) => event.target.value ? startEditing(books.find((item) => item.id === event.target.value)) : cancelEditing()}><option value="">Create a new book</option>{books.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label>
-          <label>Title<input value={book.title} onChange={(event) => setBook({ ...book, title: event.target.value })} required /></label>
-          <label>Author<input value={book.author} onChange={(event) => setBook({ ...book, author: event.target.value })} required /></label>
-          <label>ISBN<input value={book.isbn} onChange={(event) => setBook({ ...book, isbn: event.target.value })} /></label>
-          <div className="form-row">
-            <label>Category<input value={book.category} onChange={(event) => setBook({ ...book, category: event.target.value })} /></label>
-            <label>Publication year<input type="number" value={book.publication_year} onChange={(event) => setBook({ ...book, publication_year: event.target.value })} /></label>
+      />}
+      {(message || (error && !bookDialogOpen && !copyDialogOpen)) && <div role={error ? 'alert' : 'status'} className={error ? 'inline-error with-action' : 'inline-success'}><span>{error || message}</span>{error && !bookDialogOpen && !copyDialogOpen && <button type="button" className="retry-button" onClick={loadBooks}>Try again</button>}</div>}
+      {view === 'books' && <Dialog
+        open={bookDialogOpen}
+        onClose={() => { if (!saving) cancelEditing() }}
+        fullWidth
+        maxWidth="sm"
+        aria-labelledby="book-title-dialog-heading"
+        sx={{ '& .MuiDialog-paper': { borderRadius: '1rem' } }}
+      >
+        <DialogTitle id="book-title-dialog-heading">{editingBookId ? 'Edit book title' : 'Add a book'}</DialogTitle>
+        <DialogContent dividers>
+          <form className="tool-form book-title-dialog-form" onSubmit={addBook}>
+            {error && <div className="inline-error" role="alert">{error}</div>}
+            <label>Title<input value={book.title} onChange={(event) => setBook({ ...book, title: event.target.value })} required /></label>
+            <label>Author<input value={book.author} onChange={(event) => setBook({ ...book, author: event.target.value })} required /></label>
+            <label>ISBN<input value={book.isbn} onChange={(event) => setBook({ ...book, isbn: event.target.value })} /></label>
+            <div className="form-row">
+              <label>Category<input value={book.category} onChange={(event) => setBook({ ...book, category: event.target.value })} /></label>
+              <label>Publication year<input type="number" value={book.publication_year} onChange={(event) => setBook({ ...book, publication_year: event.target.value })} /></label>
+            </div>
+            <label>Course / subject tags<input value={book.course_subject} onChange={(event) => setBook({ ...book, course_subject: event.target.value })} maxLength={200} placeholder="e.g. Accounting, Business Management" /><small className="form-helper">Enter the course or subject names students would search for.</small></label>
+            <div className="form-actions">
+              <button className="primary-button" disabled={saving}>{saving ? 'Saving...' : editingBookId ? 'Save changes' : 'Add book'}</button>
+              <button className="secondary-button" type="button" onClick={cancelEditing} disabled={saving}>Cancel</button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>}
+      {view === 'books' && <Dialog
+        open={copyDialogOpen}
+        onClose={() => { if (!saving) cancelAddCopy() }}
+        fullWidth
+        maxWidth="sm"
+        aria-labelledby="physical-copy-dialog-heading"
+        sx={{ '& .MuiDialog-paper': { borderRadius: '1rem' } }}
+      >
+        <DialogTitle id="physical-copy-dialog-heading">Add Physical Copy</DialogTitle>
+        <DialogContent dividers>
+          <form className="tool-form book-title-dialog-form" onSubmit={addCopy}>
+            {copyDialogOpen && error && <div className="inline-error" role="alert">{error}</div>}
+            {loading ? <p className="form-helper" role="status">Loading catalog titles...</p> : books.length === 0 && <p className="form-helper" role="status">Add a book to the catalog before registering a physical copy.</p>}
+            <PhysicalCopyFields books={books} copy={copy} setCopy={setCopy} />
+            <div className="form-actions">
+              <button className="primary-button" disabled={saving || loading || books.length === 0}>{saving ? 'Saving...' : 'Save Copy'}</button>
+              <button className="secondary-button" type="button" onClick={cancelAddCopy} disabled={saving}>Cancel</button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>}
+      {view === 'books' && <div className="book-management-card">
+        <header className="book-management-card-header">
+          <div><h3>Catalog Titles</h3><p>Manage book records in the library catalog.</p></div>
+          <div className="book-header-actions">
+            <button type="button" className="book-add-copy-button" onClick={openAddCopy}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+              <span>Add Copy</span>
+            </button>
+            <button type="button" className="primary-button book-add-button" onClick={openAddBook}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+              <span>Add Book</span>
+            </button>
           </div>
-          <label>Course / subject tags<input value={book.course_subject} onChange={(event) => setBook({ ...book, course_subject: event.target.value })} maxLength={200} placeholder="e.g. Accounting, Business Management" /><small className="form-helper">Enter the course or subject names students would search for.</small></label>
-          <div className="form-actions"><button className="primary-button" disabled={saving}>{editingBookId ? 'Save changes' : 'Add book'}</button>{editingBookId && <button className="secondary-button" type="button" onClick={cancelEditing}>Cancel</button>}</div>
-        </form>
-        )}
+        </header>
+        <div className="book-filter-toolbar">
+          <label className="book-filter-field book-search-field"><span>Search titles</span><span className="book-search-input-wrap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>
+            <input type="search" value={bookSearch} onChange={(event) => setBookSearch(event.target.value)} placeholder="Search title, author, ISBN, or subject" aria-label="Search book titles" />
+          </span></label>
+          <label className="book-filter-field"><span>Availability</span><select value={bookAvailability} onChange={(event) => setBookAvailability(event.target.value)} aria-label="Filter titles by availability"><option value="all">All availability</option><option value="available">Available copies</option><option value="unavailable">No available copies</option></select></label>
+        </div>
+        <div className="book-list-meta">
+          <span>{filteredBookTitles.length} matching {filteredBookTitles.length === 1 ? 'book' : 'books'}</span>
+          {bookFiltersActive && <button type="button" className="book-clear-filters" onClick={clearBookFilters}>Clear Filters</button>}
+        </div>
+        <div className="book-table-scroll">
+          {loading ? <div className="empty-state loading-state">Loading catalog...</div> : books.length === 0 ? <div className="empty-state">No books have been added yet.</div> : filteredBookTitles.length === 0 ? <div className="empty-state">No titles match these filters. Clear filters to see all books.</div> : (
+            <table className="book-management-table">
+              <colgroup><col className="book-title-column" /><col className="book-author-column" /><col className="book-subject-column" /><col className="book-count-column" /><col className="book-count-column" /><col className="book-actions-column" /></colgroup>
+              <thead><tr><th scope="col">Title</th><th scope="col">Author</th><th scope="col">Course / Subject</th><th scope="col" className="book-number-cell">Copies</th><th scope="col" className="book-number-cell">Available</th><th scope="col" className="book-actions-heading">Actions</th></tr></thead>
+              <tbody>{bookPageItems.map((item) => {
+                const copies = item.book_copies ?? []
+                const available = copies.filter((itemCopy) => itemCopy.status === 'available').length
+                return <tr key={item.id}>
+                  <td className="book-title-cell"><strong>{item.title}</strong></td>
+                  <td className="book-author-cell">{item.author}</td>
+                  <td className="book-subject-cell">{item.course_subject || item.category || 'Not tagged'}</td>
+                  <td className="book-number-cell">{copies.length}</td>
+                  <td className="book-number-cell">{available}</td>
+                  <td><div className="book-row-actions">
+                    <button type="button" className="book-row-action" onClick={() => startEditing(item)} disabled={saving} aria-label={`Edit ${item.title}`} title={`Edit ${item.title}`}>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" /></svg><span>Edit</span>
+                    </button>
+                    <button type="button" className="book-row-action book-row-delete" onClick={() => setPendingDelete(item)} disabled={saving} aria-label={`Delete ${item.title}`} title={`Delete ${item.title}`}>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="m19 6-1 14H6L5 6" /><path d="M10 11v6M14 11v6" /></svg><span>Delete</span>
+                    </button>
+                  </div></td>
+                </tr>
+              })}</tbody>
+            </table>
+          )}
+        </div>
+        <footer className="book-pagination-footer">
+          <span className="book-pagination-summary">Showing {firstBookNumber}–{lastBookNumber} of {filteredBookTitles.length} {filteredBookTitles.length === 1 ? 'book' : 'books'}</span>
+          <nav className="book-pagination-nav" aria-label="Book pages">
+            <span className="book-page-status">Page {activeBookPage} of {bookPageCount}</span>
+            <button type="button" className="book-page-arrow" onClick={() => setBookPage((page) => Math.max(1, page - 1))} disabled={activeBookPage === 1} aria-label="Previous page">Previous</button>
+            {visibleBookPages.map((pageNumber) => <button type="button" key={pageNumber} className={activeBookPage === pageNumber ? 'book-page-number active' : 'book-page-number'} onClick={() => setBookPage(pageNumber)} aria-current={activeBookPage === pageNumber ? 'page' : undefined} aria-label={`Page ${pageNumber}`}>{pageNumber}</button>)}
+            <button type="button" className="book-page-arrow" onClick={() => setBookPage((page) => Math.min(bookPageCount, page + 1))} disabled={activeBookPage === bookPageCount} aria-label="Next page">Next</button>
+          </nav>
+        </footer>
+      </div>}
+      {view === 'copies' && <div className="form-grid one-column">
         <form className="tool-form" onSubmit={addCopy}>
           <h3>Add physical copy</h3>
-          <label>Book
-            <select value={copy.book_id} onChange={(event) => setCopy({ ...copy, book_id: event.target.value })} required>
-              <option value="">Select a book</option>
-              {books.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}
-            </select>
-          </label>
-          <label>Barcode<input value={copy.barcode} onChange={(event) => setCopy({ ...copy, barcode: event.target.value })} required /></label>
-          <div className="form-row">
-            <label>Location<input value={copy.location} onChange={(event) => setCopy({ ...copy, location: event.target.value })} placeholder="Library shelf" /></label>
-            <label>Condition<select value={copy.condition} onChange={(event) => setCopy({ ...copy, condition: event.target.value })}><option>good</option><option>new</option><option>worn</option></select></label>
-          </div>
+          <PhysicalCopyFields books={books} copy={copy} setCopy={setCopy} />
           <button className="primary-button" disabled={saving || books.length === 0}>Add copy</button>
         </form>
-      </div>
-      <div className="table-wrap tool-table">
-        {loading ? <div className="empty-state loading-state">Loading catalog...</div> : books.length === 0 || (view === 'copies' && copyCount === 0) ? <div className="empty-state">{view === 'copies' ? 'No physical copies have been added yet.' : 'No books have been added yet.'}</div> : view === 'books' ? (
-          <table>
-            <thead><tr><th>Title</th><th>Author</th><th>Course / subject</th><th>Copies</th><th>Available</th><th>Action</th></tr></thead>
-            <tbody>{books.map((item) => {
-              const copies = item.book_copies ?? []
-              return <tr key={item.id}><td><strong>{item.title}</strong></td><td>{item.author}</td><td>{item.course_subject || item.category || 'Not tagged'}</td><td>{copies.length}</td><td>{copies.filter((itemCopy) => itemCopy.status === 'available').length}</td><td><button type="button" className="table-action danger-action" onClick={() => setPendingDelete(item)} disabled={saving}>Delete</button></td></tr>
-            })}</tbody>
-          </table>
-        ) : (
+      </div>}
+      {view === 'copies' && <div className="table-wrap tool-table">
+        {loading ? <div className="empty-state loading-state">Loading catalog...</div> : copyCount === 0 ? <div className="empty-state">No physical copies have been added yet.</div> : (
           <table>
             <thead><tr><th>Book</th><th>Copy ID</th><th>Location</th><th>Status</th></tr></thead>
             <tbody>{books.flatMap((item) => (item.book_copies ?? []).map((itemCopy) => <tr key={itemCopy.id}><td><strong>{item.title}</strong><small className="table-subtext">{item.author}</small></td><td>{itemCopy.barcode || 'Not recorded'}</td><td>{itemCopy.location || 'Not recorded'}</td><td><span className="table-status" data-status={itemCopy.status}>{itemCopy.status?.replaceAll('_', ' ') || 'Unknown'}</span></td></tr>))}</tbody>
           </table>
         )}
-      </div>
-      <ConfirmDialog open={Boolean(pendingDelete)} title="Delete this catalog record?" description={`Delete “${pendingDelete?.title || 'this book'}”? The database will block deletion when loan history or active reservations exist.`} confirmLabel="Delete book" danger busy={Boolean(saving && pendingDelete)} onCancel={() => setPendingDelete(null)} onConfirm={() => { if (pendingDelete) void deleteBook(pendingDelete.id) }} />
+      </div>}
+      <ConfirmDialog open={Boolean(pendingDelete)} title="Delete this catalog record?" description={`Delete “${pendingDelete?.title || 'this book'}”? The database will block deletion when borrowing history or active reservations exist.`} confirmLabel="Delete book" danger busy={Boolean(saving && pendingDelete)} onCancel={() => setPendingDelete(null)} onConfirm={() => { if (pendingDelete) void deleteBook(pendingDelete.id) }} />
     </section>
   )
 }
@@ -291,12 +466,24 @@ export function AdminPanel({ onBack, userId }) {
   }
 
   const { pageItems, pagination } = usePagination(profiles, '')
+  const roleCounts = {
+    administrators: profiles.filter((profile) => profile.role === 'administrator').length,
+    librarians: profiles.filter((profile) => profile.role === 'librarian').length,
+    members: profiles.filter((profile) => profile.role === 'member').length,
+  }
 
 
   return (
     <section className="content-section">
       <ToolHeader eyebrow="Administrator tools" title="User roles" description="Manage the three approved roles. Users must sign in again after a role change." onBack={onBack} />
       {(message || error) && <div role={error ? 'alert' : 'status'} className={error ? 'inline-error with-action' : 'inline-success'}><span>{error || message}</span>{error && <button type="button" className="retry-button" onClick={loadProfiles}>Try again</button>}</div>}
+      <div className="staff-summary-grid user-role-summary" aria-label="User totals by role">
+        <article className="staff-summary-card"><span>All accounts</span><strong>{loading ? '—' : profiles.length}</strong></article>
+        <article className="staff-summary-card"><span>Administrators</span><strong>{loading ? '—' : roleCounts.administrators}</strong></article>
+        <article className="staff-summary-card"><span>Librarians</span><strong>{loading ? '—' : roleCounts.librarians}</strong></article>
+        <article className="staff-summary-card"><span>Members</span><strong>{loading ? '—' : roleCounts.members}</strong></article>
+      </div>
+      <div className="staff-list-heading"><div><h3>Accounts and access</h3><p className="muted">Role changes apply after the user signs in again.</p></div><span>{loading ? 'Loading…' : `${profiles.length} accounts`}</span></div>
       <div className="table-wrap tool-table">
         {loading ? <div className="empty-state loading-state">Loading users...</div> : profiles.length === 0 ? <div className="empty-state">No users found.</div> : (
           <table>
@@ -311,14 +498,18 @@ export function AdminPanel({ onBack, userId }) {
           </table>
         )}
       </div>
-      <CirculationHealth />
+      {pagination}
+      <section className="admin-health-section">
+        <div className="staff-list-heading"><div><h3>Scheduled circulation</h3><p className="muted">Background overdue and pickup-expiry processing.</p></div></div>
+        <CirculationHealth />
+      </section>
       <form className="tool-form policy-form" onSubmit={savePolicy}>
         <h3>Circulation policy</h3>
         <p className="muted">These values are enforced by the database after all database migrations are applied.</p>
         {policyLoading ? <div className="empty-state loading-state">Loading policy...</div> : <>
           <div className="form-row three-column">
-            <label>Loan period (1–3 days)<input type="number" min="1" max="3" value={policy.loan_period_days} onChange={(event) => setPolicy({ ...policy, loan_period_days: Number(event.target.value) })} required /></label>
-            <label>Max active loans<input type="number" min="1" value={policy.max_active_loans} onChange={(event) => setPolicy({ ...policy, max_active_loans: Number(event.target.value) })} required /></label>
+            <label>Borrowing period (1–3 days)<input type="number" min="1" max="3" value={policy.loan_period_days} onChange={(event) => setPolicy({ ...policy, loan_period_days: Number(event.target.value) })} required /></label>
+            <label>Maximum books checked out per member<input type="number" min="1" value={policy.max_active_loans} onChange={(event) => setPolicy({ ...policy, max_active_loans: Number(event.target.value) })} required /></label>
             <label>Due-soon window (days)<input type="number" min="0" value={policy.due_soon_days} onChange={(event) => setPolicy({ ...policy, due_soon_days: Number(event.target.value) })} required /></label>
           </div>
           <div className="form-row three-column">
@@ -330,7 +521,7 @@ export function AdminPanel({ onBack, userId }) {
           <button className="primary-button" disabled={policySaving}>{policySaving ? 'Saving policy...' : 'Save policy'}</button>
         </>}
       </form>
-    {pagination}</section>
+    </section>
   )
 }
 
@@ -437,14 +628,14 @@ export function StaffCirculation({ onBack }) {
     setError('')
     try {
       const { error: closeError } = await supabase.rpc('close_loan_with_status', { p_loan_id: loanId, p_status: status })
-      if (closeError) setError(`Unable to mark this loan ${status}. Please try again.`)
+      if (closeError) setError(`Unable to mark this book ${status}. Please try again.`)
       else {
-        setMessage(`Loan marked ${status}.`)
+        setMessage(`Book marked ${status}.`)
         await loadData()
       }
     } catch (closeError) {
       if (import.meta.env.DEV) console.error(`[circulation] ${status} loan failed`, closeError)
-      setError(`Unable to mark this loan ${status}. Please try again.`)
+      setError(`Unable to mark this book ${status}. Please try again.`)
     } finally {
       setSaving(false)
       setPendingClose(null)
@@ -452,17 +643,24 @@ export function StaffCirculation({ onBack }) {
   }
 
   const visibleMembers = members.filter((member) => `${member.full_name || ''} ${member.library_card_number || ''} ${member.school_id || ''} ${member.id}`.toLowerCase().includes(memberQuery.toLowerCase()))
-  const visibleLoans = loans.filter((loan) => !returnBarcode || loan.book_copies?.barcode.toLowerCase().includes(returnBarcode.toLowerCase()))
+  const visibleLoans = loans.filter((loan) => !returnBarcode || loan.book_copies?.barcode?.toLowerCase().includes(returnBarcode.toLowerCase()))
   const { pageItems, pagination } = usePagination(visibleLoans, returnBarcode)
   const scanCopy = (value) => {
     setBarcode(value)
     setCopyId(copies.find((copy) => copy.barcode === value.trim())?.id || '')
   }
+  const availableCopyCount = copies.filter((copy) => copy.status === 'available').length
 
   return (
     <section className="content-section">
       <ToolHeader eyebrow="Circulation desk" title="Borrow / Return" description="Check out available copies and process returns using the current library records." onBack={onBack} />
       {(message || error) && <div role={error ? 'alert' : 'status'} className={error ? 'inline-error with-action' : 'inline-success'}><span>{error || message}</span>{error && <button type="button" className="retry-button" onClick={loadData}>Try again</button>}</div>}
+      <div className="staff-summary-grid circulation-summary" aria-label="Circulation totals">
+        <article className="staff-summary-card"><span>Available copies</span><strong>{loading ? '—' : availableCopyCount}</strong></article>
+        <article className="staff-summary-card"><span>Card-verified members</span><strong>{loading ? '—' : members.length}</strong></article>
+        <article className="staff-summary-card"><span>Books checked out</span><strong>{loading ? '—' : loans.length}</strong></article>
+      </div>
+      <div className="circulation-workflow-grid">
       <form className="tool-form checkout-form" onSubmit={checkout}>
         <h3>Check out a book</h3>
         <label>Scan library card or find member<input value={memberQuery} onChange={(event) => { const value = event.target.value; setMemberQuery(value); const match = members.find((member) => member.library_card_number?.toLowerCase() === value.trim().toLowerCase()); setMemberId(match?.id || '') }} onKeyDown={(event) => { if (event.key === 'Enter') event.preventDefault() }} placeholder="Scan card number or search name" /></label>
@@ -472,18 +670,21 @@ export function StaffCirculation({ onBack }) {
           <label>1. Member<select value={memberId} onChange={(event) => setMemberId(event.target.value)} required><option value="">Select member</option>{visibleMembers.map((member) => <option key={member.id} value={member.id}>{member.full_name} · {member.library_card_number}</option>)}</select></label>
           <label>2. Copy (available or assigned hold)<select value={copyId} onChange={(event) => { setCopyId(event.target.value); setBarcode(copies.find((item) => item.id === event.target.value)?.barcode || '') }} required><option value="">Select copy</option>{copies.map((copy) => <option key={copy.id} value={copy.id}>{copy.books?.title || 'Unknown'} · {copy.barcode}</option>)}</select></label>
         </div>
-        <small className="form-helper">The due date is set automatically from the configured loan period and enforced by the database.</small>
+        <small className="form-helper">The due date is set automatically from the configured borrowing period and enforced by the database.</small>
         {(members.length === 0 || copies.length === 0) && !loading && <small className="form-helper">{members.length === 0 ? 'No active members with verified library cards are available. Register or update the member record first.' : 'No available copies are listed.'}</small>}
-        <small className="form-helper">Default loan period: {policy.loan_period_days} days · Maximum active loans: {policy.max_active_loans}</small>
+        <small className="form-helper">Borrowing period: {policy.loan_period_days} days · Maximum books per member: {policy.max_active_loans}</small>
         <button className="primary-button" disabled={saving || loading || !copyId || !memberId}>Check out</button>
       </form>
-      {receipt && <div className="inline-success" role="status"><strong>Checkout receipt</strong><p>{receipt.member} · Card {receipt.card} · {receipt.title} · {receipt.barcode}</p><p>Due: {receipt.due_at ? new Date(receipt.due_at).toLocaleString() : 'See loan record'}</p><code>{receipt.id}</code></div>}
-      <form className="tool-form" onSubmit={(event) => { event.preventDefault(); const loan = loans.find((item) => item.book_copies?.barcode === returnBarcode.trim()); if (loan) void returnLoan(loan.id); else setError('No active loan matches this barcode.') }}>
-        <label>Return by barcode<input value={returnBarcode} onChange={(event) => setReturnBarcode(event.target.value)} placeholder="Scan or type barcode" required /></label>
-        <button disabled={saving || loading}>Return scanned copy</button>
+      {receipt && <div className="inline-success" role="status"><strong>Checkout receipt</strong><p>{receipt.member} · Card {receipt.card} · {receipt.title} · {receipt.barcode}</p><p>Due: {receipt.due_at ? new Date(receipt.due_at).toLocaleString() : 'See borrowing record'}</p><code>{receipt.id}</code></div>}
+      <form className="tool-form return-form" onSubmit={(event) => { event.preventDefault(); const loan = loans.find((item) => item.book_copies?.barcode === returnBarcode.trim()); if (loan) void returnLoan(loan.id); else setError('No active checkout matches this barcode.') }}>
+        <div><h3>Check in a return</h3><p className="muted">Scan the barcode after the library physically receives the book.</p></div>
+        <label>Copy barcode<input value={returnBarcode} onChange={(event) => setReturnBarcode(event.target.value)} placeholder="Scan or type barcode" required /></label>
+        <button className="primary-button" disabled={saving || loading || !returnBarcode.trim()}>{saving ? 'Processing return…' : 'Return scanned copy'}</button>
       </form>
+      </div>
+      <div className="staff-list-heading circulation-list-heading"><div><h3>Books currently checked out</h3><p className="muted">Search or scan a barcode to narrow the list before processing a return.</p></div><span>{loading ? 'Loading…' : `${visibleLoans.length} ${visibleLoans.length === 1 ? 'book' : 'books'}`}</span></div>
       <div className="table-wrap tool-table">
-        {loading ? <div className="empty-state loading-state">Loading borrowing records...</div> : loans.length === 0 ? <div className="empty-state">No active loans.</div> : (
+        {loading ? <div className="empty-state loading-state">Loading borrowing records...</div> : loans.length === 0 ? <div className="empty-state">No books are currently checked out.</div> : visibleLoans.length === 0 ? <div className="empty-state">No checked-out books match this barcode.</div> : (
           <table>
             <thead><tr><th>Book</th><th>Member</th><th>Borrowed</th><th>Status</th><th>Due</th><th>Fine</th><th>Action</th></tr></thead>
             <tbody>{pageItems.map((loan) => <tr key={loan.id}>
@@ -499,7 +700,7 @@ export function StaffCirculation({ onBack }) {
         )}
       </div>
       {pagination}
-      <ConfirmDialog open={Boolean(pendingClose)} title={`Mark loan ${pendingClose?.status || 'closed'}?`} description="This closes the loan and changes the physical copy status. The action is recorded in the audit log." confirmLabel={`Mark ${pendingClose?.status || 'closed'}`} danger busy={Boolean(saving && pendingClose)} onCancel={() => setPendingClose(null)} onConfirm={() => { if (pendingClose) void closeLoan(pendingClose.loanId, pendingClose.status) }} />
+      <ConfirmDialog open={Boolean(pendingClose)} title={`Mark book ${pendingClose?.status || 'closed'}?`} description="This closes the borrowing record and changes the physical copy status. The action is recorded in the audit log." confirmLabel={`Mark ${pendingClose?.status || 'closed'}`} danger busy={Boolean(saving && pendingClose)} onCancel={() => setPendingClose(null)} onConfirm={() => { if (pendingClose) void closeLoan(pendingClose.loanId, pendingClose.status) }} />
     </section>
   )
 }

@@ -1,8 +1,8 @@
 import { fetchAllRows } from './lib/paging'
 import { TransactionHistory } from './components/TransactionHistory'
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
-import { Alert, Button, Paper, TextField } from '@mui/material'
-import { useAuth } from './lib/auth'
+import { Alert, Button, IconButton, InputAdornment, Paper, TextField } from '@mui/material'
+import { detectAuthIdentifierType, useAuth } from './lib/auth'
 import { supabase } from './lib/supabase'
 import { defaultCirculationPolicy, getLoanDueState, normalizeCirculationPolicy } from './lib/circulation'
 
@@ -22,6 +22,7 @@ const StaffReservations = lazyNamed(() => import('./components/StaffViews'), 'St
 const StaffBookRequests = lazyNamed(() => import('./components/StaffInventory'), 'StaffBookRequests')
 const StaffInventoryAudit = lazyNamed(() => import('./components/StaffInventory'), 'StaffInventoryAudit')
 const AnalyticsSection = lazyNamed(() => import('./components/AnalyticsSection'), 'AnalyticsSection')
+const ActivityLogs = lazyNamed(() => import('./components/ActivityLogs'), 'ActivityLogs')
 
 const roleLabels = {
   member: 'Member',
@@ -45,6 +46,7 @@ const navigationIconPaths = {
   'user-management': 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M5 21a7 7 0 0 1 14 0 M18 8h3 M19.5 6.5v3',
   'my-books': 'M5 4h9a5 5 0 0 1 5 5v11H10a5 5 0 0 0-5 0V4z',
   history: 'M5 12a7 7 0 1 0 2-5 M5 5v4h4 M12 8v5l3 2',
+  'activity-logs': 'M5 12a7 7 0 1 0 2-5 M5 5v4h4 M12 8v5l3 2',
   notifications: 'M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9 M10 21h4',
   profile: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M5 21a7 7 0 0 1 14 0',
 }
@@ -57,10 +59,9 @@ export function friendlyAuthError(message) {
   const normalized = (message || '').toLowerCase()
   if (normalized.includes('failed to fetch') || normalized.includes('timed out') || normalized.includes('network')) return 'The library service could not be reached. Verify the Supabase URL and your internet connection, then try again.'
   if (normalized.includes('rate limit')) return 'Too many sign-in attempts were made. Wait a few minutes, then try again.'
-  if (normalized.includes('edge function') || normalized.includes('function not found') || normalized.includes('not configured on the server')) return 'School ID sign-in is not deployed or configured yet. Deploy the school-id-auth Supabase Edge Function first.'
-  if (normalized.includes('school id or password')) return 'The school ID or password is incorrect.'
-  if (normalized.includes('sms') || normalized.includes('phone provider') || normalized.includes('phone authentication')) return 'Phone sign-in is not enabled yet. Enable Phone auth and an SMS provider in Supabase Authentication > Providers.'
-  if (normalized.includes('invalid login credentials')) return 'The email or phone number or password is incorrect. Check the account or create it first.'
+  if (normalized.includes('edge function') || normalized.includes('function not found') || normalized.includes('not configured on the server')) return 'The sign-in service is unavailable. Please try again later.'
+  if (normalized.includes('invalid email, school id, or password') || normalized.includes('invalid login credentials') || normalized.includes('school id or password') || normalized.includes('email or password') || normalized.includes('email not confirmed')) return 'Invalid email, School ID, or password.'
+  if (normalized.includes('signups not allowed')) return 'Student registration is disabled in Supabase Auth. Enable email sign-ups and email confirmation in the project settings.'
   return 'We could not complete that request. Check your details and try again.'
 }
 
@@ -112,20 +113,26 @@ const authFeedbackSx = {
 }
 
 function AuthForm({ onBrowseCatalog }) {
-  const { signIn, recoverSchoolId, error: authError, clearError } = useAuth()
-  const [identifierType, setIdentifierType] = useState('email')
+  const { signIn, recoverSchoolId, createMemberAccount, error: authError, clearError } = useAuth()
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [invitation, setInvitation] = useState('')
   const [recovering, setRecovering] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
+  const [registering, setRegistering] = useState(false)
+  const [registration, setRegistration] = useState({ fullName: '', email: '', schoolId: '', password: '', confirmPassword: '' })
+  const [registrationMessage, setRegistrationMessage] = useState('')
   const [submitError, setSubmitError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const identifierType = detectAuthIdentifierType(identifier)
 
-  const switchIdentifierType = (nextType) => {
-    setIdentifierType(nextType)
+  const switchMode = (nextMode) => {
+    setRegistering(nextMode)
     setRecovering(false)
     setInvitation('')
+    setPassword('')
     setSubmitError('')
+    setRegistrationMessage('')
     clearError()
   }
 
@@ -136,12 +143,29 @@ function AuthForm({ onBrowseCatalog }) {
     clearError()
 
     try {
-      const result = recovering && identifierType === 'school_id'
-        ? await recoverSchoolId(identifier, password, invitation)
-        : await signIn(identifier, password, identifierType)
-
-      if (result.error) {
-        setSubmitError(result.error.message)
+      if (registering) {
+        if (registration.password !== registration.confirmPassword) {
+          setSubmitError('The passwords do not match.')
+          return
+        }
+        const result = await createMemberAccount(registration)
+        if (result.error) setSubmitError(result.error.message)
+        else {
+          setRegistrationMessage('If this email can be registered, a confirmation message has been sent. Confirm your email, sign in, then verify your library card and PIN to link your library record.')
+          setRegistering(false)
+          setIdentifier(registration.email.trim())
+          setRegistration((current) => ({ ...current, password: '', confirmPassword: '' }))
+        }
+      } else if (recovering) {
+        if (identifierType !== 'school_id') {
+          setSubmitError('Enter the School ID verified by library staff to use account recovery.')
+          return
+        }
+        const result = await recoverSchoolId(identifier, password, invitation)
+        if (result.error) setSubmitError(result.error.message)
+      } else {
+        const result = await signIn(identifier, password)
+        if (result.error) setSubmitError(result.error.message)
       }
     } catch (requestError) {
       setSubmitError(requestError.message || 'The request could not be completed.')
@@ -150,57 +174,76 @@ function AuthForm({ onBrowseCatalog }) {
     }
   }
 
+  const primaryButtonSx = { minHeight: '3.1rem', marginTop: '.1rem', borderRadius: '.55rem', backgroundColor: '#a40000', '&:hover': { backgroundColor: '#820000' }, '&:focus-visible': { outline: '3px solid rgba(164, 0, 0, .24)', outlineOffset: '2px' } }
+  const secondaryButtonSx = { minHeight: '3rem', marginTop: '.5rem', borderRadius: '.55rem', borderColor: '#a40000', color: '#8d0000', '&:hover': { borderColor: '#820000', backgroundColor: '#fff7f7' } }
+
   return (
     <Paper component="section" className="auth-card" elevation={0} sx={{ backgroundColor: '#fff', border: '1px solid #e6d9d8', borderRadius: '1.1rem', boxShadow: '0 1rem 2.5rem rgba(0, 38, 61, .08)' }}>
       <div className="card-heading">
         <span className="eyebrow">Library access</span>
-        <h2>Staff sign in</h2>
-        <p>Students do not need an online account or email. Staff use their login to manage circulation.</p>
+        <h2>{registering ? 'Create member account' : 'Sign In'}</h2>
+        <p>{registering
+          ? 'Register with your email and School ID. After email confirmation, verify your library card to connect your library record.'
+          : 'Access your IBA College Library account.'}</p>
       </div>
-      <form onSubmit={submit} aria-busy={submitting}>
-        <div className="auth-method-switch" role="group" aria-label="Sign-in method">
-          <button type="button" className={identifierType === 'email' ? 'active' : ''} onClick={() => switchIdentifierType('email')}>Email</button>
-          <button type="button" className={identifierType === 'phone' ? 'active' : ''} onClick={() => switchIdentifierType('phone')}>Phone</button>
-          <button type="button" className={identifierType === 'school_id' ? 'active' : ''} onClick={() => switchIdentifierType('school_id')}>School ID</button>
-        </div>
+      {registrationMessage && <Alert severity="success" variant="outlined" role="status" sx={authFeedbackSx}>{registrationMessage}</Alert>}
+      {registering ? <form onSubmit={submit} aria-busy={submitting}>
+        <TextField id="register-full-name" label="Full name" value={registration.fullName} onChange={(event) => setRegistration({ ...registration, fullName: event.target.value })} autoComplete="name" inputProps={{ maxLength: 160 }} required fullWidth sx={authFieldSx} />
+        <TextField id="register-email" label="Email address" type="email" value={registration.email} onChange={(event) => setRegistration({ ...registration, email: event.target.value })} autoComplete="email" required fullWidth sx={authFieldSx} />
+        <TextField id="register-school-id" label="School ID" value={registration.schoolId} onChange={(event) => setRegistration({ ...registration, schoolId: event.target.value })} autoComplete="off" inputProps={{ maxLength: 32, pattern: '[A-Za-z0-9][A-Za-z0-9._-]{2,31}' }} helperText="Use the School ID already recorded by library staff." required fullWidth sx={authFieldSx} />
+        <TextField id="register-password" label="Create password" type="password" value={registration.password} onChange={(event) => setRegistration({ ...registration, password: event.target.value })} autoComplete="new-password" inputProps={{ minLength: 12, maxLength: 128 }} helperText="Use at least 12 characters." required fullWidth sx={authFieldSx} />
+        <TextField id="register-confirm-password" label="Confirm password" type="password" value={registration.confirmPassword} onChange={(event) => setRegistration({ ...registration, confirmPassword: event.target.value })} autoComplete="new-password" inputProps={{ minLength: 12, maxLength: 128 }} required fullWidth sx={authFieldSx} />
+        <div className="account-registration-note"><strong>To finish setup:</strong> confirm the email, then enter your library card number and private reservation PIN. Ask library staff to set a PIN if you do not have one.</div>
+        {(submitError || authError) && <Alert severity="error" variant="outlined" role="alert" sx={authFeedbackSx}>{friendlyAuthError(submitError || authError)}</Alert>}
+        <Button type="submit" fullWidth variant="contained" disabled={submitting} sx={primaryButtonSx}>{submitting ? 'Creating account...' : 'Create account'}</Button>
+        <Button type="button" fullWidth variant="outlined" onClick={() => switchMode(false)} sx={secondaryButtonSx}>Back to sign in</Button>
+      </form> : <form className="auth-form" onSubmit={submit} aria-busy={submitting}>
         <TextField
           id="auth-identifier"
-          name={identifierType}
-          type={identifierType === 'phone' ? 'tel' : identifierType === 'school_id' ? 'text' : 'email'}
-          label={identifierType === 'phone' ? 'Phone number' : identifierType === 'school_id' ? 'School ID' : 'Email'}
-          placeholder={identifierType === 'phone' ? '+63 912 345 6789' : identifierType === 'school_id' ? 'e.g. 2024-12345' : undefined}
-          helperText={identifierType === 'phone' ? 'Use international format, for example +63 912 345 6789.' : identifierType === 'school_id' ? 'Use the ID issued by your school.' : undefined}
-          autoComplete={identifierType === 'phone' ? 'tel' : identifierType === 'school_id' ? 'username' : 'email'}
+          name="username"
+          type="text"
+          label="Email or School ID"
+          placeholder="Enter your email or School ID"
+          autoComplete="username"
+          inputProps={{ maxLength: 320 }}
           value={identifier}
           onChange={(event) => setIdentifier(event.target.value)}
           required
           fullWidth
           sx={authFieldSx}
         />
-        {identifierType === 'school_id' && <>
-          <label><input type="checkbox" checked={recovering} onChange={(event) => setRecovering(event.target.checked)} /> Reset password with a staff recovery invitation</label>
-          {recovering && <TextField label="Staff recovery code" type="password" value={invitation} onChange={(event) => setInvitation(event.target.value.trim())} required fullWidth helperText="Ask staff for a recovery code after they verify your identity." sx={authFieldSx} />}
-        </>}
         <TextField
           id="auth-password"
           name="password"
-          type="password"
-          label="Password"
-          autoComplete="current-password"
+          type={showPassword ? 'text' : 'password'}
+          label={recovering ? 'New password' : 'Password'}
+          autoComplete={recovering ? 'new-password' : 'current-password'}
           value={password}
           onChange={(event) => setPassword(event.target.value)}
-          minLength={6}
+          inputProps={{ minLength: recovering ? 12 : 6, maxLength: 128 }}
           required
           fullWidth
           sx={authFieldSx}
+          InputProps={{
+            endAdornment: <InputAdornment position="end"><IconButton
+              type="button"
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              onClick={() => setShowPassword((visible) => !visible)}
+              edge="end"
+              size="small"
+            >{showPassword ? 'Hide password' : 'Show password'}</IconButton></InputAdornment>,
+          }}
         />
+        {recovering && (identifierType === 'school_id'
+          ? <TextField label="Staff recovery code" type="password" value={invitation} onChange={(event) => setInvitation(event.target.value.trim())} required fullWidth helperText="Ask library staff for a one-time code after they verify your identity." sx={authFieldSx} />
+          : <p className="auth-recovery-note">School ID recovery uses the ID verified by library staff and a staff-issued recovery code.</p>)}
         {(submitError || authError) && <Alert severity="error" variant="outlined" role="alert" sx={authFeedbackSx}>{friendlyAuthError(submitError || authError)}</Alert>}
-        <Button type="submit" fullWidth variant="contained" disabled={submitting} sx={{ minHeight: '3.1rem', marginTop: '.1rem', borderRadius: '.55rem', backgroundColor: '#a40000', '&:hover': { backgroundColor: '#820000' }, '&:focus-visible': { outline: '3px solid rgba(164, 0, 0, .24)', outlineOffset: '2px' } }}>
-          {submitting ? 'Signing in...' : recovering ? 'Reset password' : 'Sign in'}
-        </Button>
-      </form>
+        <Button type="submit" fullWidth variant="contained" disabled={submitting || (recovering && identifierType !== 'school_id')} sx={primaryButtonSx}>{submitting ? recovering ? 'Resetting password...' : 'Signing in...' : recovering ? 'Reset Password' : 'Sign In'}</Button>
+        <button type="button" className="auth-text-link" aria-expanded={recovering} onClick={() => { setRecovering((value) => !value); setInvitation(''); setPassword(''); setSubmitError(''); clearError() }}>{recovering ? 'Back to Sign In' : 'Forgot Password?'}</button>
+        {!recovering && <Button type="button" fullWidth variant="outlined" onClick={() => switchMode(true)} sx={secondaryButtonSx}>Create Member Account</Button>}
+      </form>}
       <Button type="button" fullWidth variant="outlined" onClick={onBrowseCatalog} sx={{ minHeight: '3rem', marginTop: '1rem', borderRadius: '.55rem', borderColor: '#a40000', color: '#8d0000', '&:hover': { borderColor: '#820000', backgroundColor: '#fff7f7' } }}>
-        Browse catalog without an account
+        Browse Catalog Without an Account
       </Button>
     </Paper>
   )
@@ -217,7 +260,7 @@ function LibraryInfoPanel() {
       </div>
       <span className="eyebrow">College library</span>
       <h1 id="library-info-title">Your library,<br />organized.</h1>
-  <p>Browse the collection without an account. Students use library cards; staff handle checkout, returns, and holds.</p>
+      <p>Browse without an account. Members can use a library card and PIN for online holds; staff record checkouts and returns at the desk.</p>
       <ul className="library-info-list">
         <li>Search the library collection</li>
         <li>See availability and shelf locations</li>
@@ -251,6 +294,54 @@ function AuthPage({ children, browsingCatalog = false, onBackToSignIn }) {
   )
 }
 
+function MemberAccountLink({ session, profile }) {
+  const { completeMemberAccountRegistration, refreshProfile, signOut } = useAuth()
+  const [schoolId, setSchoolId] = useState(session?.user?.user_metadata?.registration_school_id || '')
+  const [cardNumber, setCardNumber] = useState('')
+  const [pin, setPin] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [message, setMessage] = useState('')
+
+  const submit = async (event) => {
+    event.preventDefault()
+    setSubmitting(true)
+    setMessage('')
+    try {
+      const result = await completeMemberAccountRegistration(schoolId.trim(), cardNumber.trim(), pin.trim())
+      if (result.error) throw result.error
+      if (!result.data?.verified) {
+        setMessage('We could not verify those details. Check your School ID, library card, and PIN, or ask library staff to update your member record.')
+        return
+      }
+      const profileResult = await refreshProfile()
+      if (profileResult.error) throw profileResult.error
+    } catch (error) {
+      setMessage(error.message || 'We could not link your library record. Please try again or ask library staff for help.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return <AuthPage>
+    <Paper component="section" className="auth-card" elevation={0} sx={{ backgroundColor: '#fff', border: '1px solid #e6d9d8', borderRadius: '1.1rem', boxShadow: '0 1rem 2.5rem rgba(0, 38, 61, .08)' }}>
+      <div className="card-heading">
+        <span className="eyebrow">One-time verification</span>
+        <h2>Link your library record</h2>
+        <p>Welcome{profile?.full_name ? `, ${profile.full_name}` : ''}. Confirm your School ID and verify the library card and PIN registered by library staff to access member features.</p>
+      </div>
+      <form onSubmit={submit} aria-busy={submitting}>
+        <TextField id="link-school-id" label="School ID" value={schoolId} onChange={(event) => setSchoolId(event.target.value)} autoComplete="username" inputProps={{ maxLength: 32, pattern: '[A-Za-z0-9][A-Za-z0-9._-]{2,31}' }} required fullWidth sx={authFieldSx} />
+        <TextField id="link-library-card" label="Library card number" value={cardNumber} onChange={(event) => setCardNumber(event.target.value)} autoComplete="off" inputProps={{ maxLength: 100 }} required fullWidth sx={authFieldSx} />
+        <TextField id="link-reservation-pin" label="Library PIN" type="password" value={pin} onChange={(event) => setPin(event.target.value)} autoComplete="off" inputProps={{ inputMode: 'numeric', pattern: '[0-9]{6,12}', minLength: 6, maxLength: 12 }} helperText="Enter the 6–12 digit PIN issued by library staff." required fullWidth sx={authFieldSx} />
+        {message && <Alert severity="error" variant="outlined" role="alert" sx={authFeedbackSx}>{message}</Alert>}
+        <div className="account-registration-note"><strong>Need a card or PIN?</strong> Visit the library desk. Staff must register your member record and verify your identity before linking it.</div>
+        <Button type="submit" fullWidth variant="contained" disabled={submitting} sx={{ minHeight: '3.1rem', borderRadius: '.55rem', backgroundColor: '#a40000', '&:hover': { backgroundColor: '#820000' } }}>{submitting ? 'Verifying...' : 'Verify and continue'}</Button>
+        <Button type="button" fullWidth variant="outlined" onClick={signOut} sx={{ minHeight: '3rem', borderRadius: '.55rem', borderColor: '#a40000', color: '#8d0000' }}>Sign out</Button>
+      </form>
+    </Paper>
+  </AuthPage>
+}
+
 const dashboardSections = [
   { id: 'dashboard', label: 'Dashboard', roles: ['member', 'librarian', 'administrator'] },
   { id: 'catalog', label: 'Catalog', roles: ['member', 'librarian', 'administrator'] },
@@ -281,7 +372,6 @@ const staffNavigationGroups = [
     items: [
       { id: 'catalog', label: 'Catalog', roles: ['librarian', 'administrator'] },
       { id: 'books', label: 'Books', roles: ['librarian', 'administrator'] },
-      { id: 'copies', label: 'Copies', roles: ['librarian', 'administrator'] },
       { id: 'reservations', label: 'Reservations', roles: ['librarian', 'administrator'] },
     ],
   },
@@ -299,6 +389,7 @@ const staffNavigationGroups = [
       { id: 'members', label: 'Members', roles: ['librarian', 'administrator'] },
       { id: 'requests', label: 'Book Requests', roles: ['librarian', 'administrator'] },
       { id: 'audit', label: 'Stock Audit', roles: ['librarian', 'administrator'] },
+      { id: 'activity-logs', label: 'Activity Logs', roles: ['administrator'] },
       { id: 'reports', label: 'Reports', roles: ['librarian', 'administrator'] },
       { id: 'user-management', label: 'User Management', roles: ['administrator'] },
     ],
@@ -491,9 +582,9 @@ function AdministratorDashboardOverview({ userId, displayName, onOpenSection }) 
     { key: 'catalog', label: 'Catalog titles', value: stats.catalogTitles, note: 'Book records' },
     { key: 'copies', label: 'Total copies', value: stats.totalCopies, note: 'Physical copies' },
     { key: 'available', label: 'Available copies', value: stats.availableCopies, note: 'Ready to borrow' },
-    { key: 'loans', label: 'Active loans', value: stats.activeLoans, note: 'Open loans' },
+    { key: 'loans', label: 'Books checked out', value: stats.activeLoans, note: 'Currently borrowed' },
     { key: 'reservations', label: 'Open reservations', value: stats.openReservations, note: 'Waiting or ready' },
-    { key: 'overdue', label: 'Overdue loans', value: stats.overdueLoans, note: 'Marked overdue' },
+    { key: 'overdue', label: 'Overdue books', value: stats.overdueLoans, note: 'Past the due date' },
   ]
 
   const renderStatValue = (value, label) => loading
@@ -708,7 +799,7 @@ function DashboardOverview({ role, userId, displayName, onOpenFeatures, onOpenSe
         <div>
           <span className="eyebrow">{roleLabels[role] ?? 'User'} dashboard</span>
           <h1>{getGreeting()}, {firstName}.</h1>
-          <p className="muted">{isStaff ? 'Keep the collection, circulation desk, and access controls moving.' : 'Find what you need, reserve unavailable books, and keep track of your loans.'}</p>
+          <p className="muted">{isStaff ? 'Keep the collection, circulation desk, and access controls moving.' : 'Find what you need, reserve unavailable books, and track the books you borrow.'}</p>
         </div>
         <div className="status-pill"><span /> Live library overview</div>
       </div>
@@ -723,7 +814,7 @@ function DashboardOverview({ role, userId, displayName, onOpenFeatures, onOpenSe
         {isStaff ? <>
           <article className="stat-card accent-red"><span>Catalog titles</span><strong>{metric(stats.first)}</strong><small>Book records in the system</small></article>
           <article className="stat-card accent-gold"><span>Available copies</span><strong>{metric(stats.second)}</strong><small>Ready to be borrowed</small></article>
-          <article className="stat-card accent-navy"><span>Active loans</span><strong>{metric(stats.third)}</strong><small>Borrowed or overdue</small></article>
+          <article className="stat-card accent-navy"><span>Books checked out</span><strong>{metric(stats.third)}</strong><small>Currently borrowed</small></article>
           <article className="stat-card"><span>Open reservations</span><strong>{metric(stats.fourth)}</strong><small>Waiting or ready for pickup</small></article>
         </> : <>
           <article className="stat-card accent-red"><span>Books borrowed</span><strong>{metric(stats.first)}</strong><small>Currently checked out</small></article>
@@ -747,8 +838,8 @@ function DashboardOverview({ role, userId, displayName, onOpenFeatures, onOpenSe
         </div>
       </section> : <section className="activity-grid">
         <div className="activity-panel">
-          <div className="panel-heading"><div><span className="eyebrow">Borrowing</span><h2>My current loans</h2></div><button type="button" className="text-button" onClick={onOpenFeatures}>Browse catalog</button></div>
-          {loading ? <div className="empty-state compact loading-state">Loading your loans...</div> : loans.length === 0 ? <div className="empty-state compact">No active loans yet.</div> : <div className="activity-list">{loans.map((loan) => <div className="activity-item" key={loan.id}><div><strong>{loan.book_copies?.books?.title || 'Unknown book'}</strong><small>Checked out {new Date(loan.checked_out_at).toLocaleDateString()}</small></div><span className={loan.status === 'overdue' ? 'table-status danger' : 'table-status'} data-status={loan.status}>{loan.status}</span></div>)}</div>}
+          <div className="panel-heading"><div><span className="eyebrow">Borrowing</span><h2>Books I have borrowed</h2></div><button type="button" className="text-button" onClick={onOpenFeatures}>Browse catalog</button></div>
+          {loading ? <div className="empty-state compact loading-state">Loading your books...</div> : loans.length === 0 ? <div className="empty-state compact">No books are currently checked out to you.</div> : <div className="activity-list">{loans.map((loan) => <div className="activity-item" key={loan.id}><div><strong>{loan.book_copies?.books?.title || 'Unknown book'}</strong><small>Checked out {new Date(loan.checked_out_at).toLocaleDateString()}</small></div><span className={loan.status === 'overdue' ? 'table-status danger' : 'table-status'} data-status={loan.status}>{loan.status}</span></div>)}</div>}
         </div>
         <div className="activity-panel">
           <div className="panel-heading"><div><span className="eyebrow">Reservations</span><h2>My queue</h2></div><button type="button" className="text-button" onClick={onOpenFeatures}>Find a book</button></div>
@@ -771,9 +862,10 @@ function DashboardOverview({ role, userId, displayName, onOpenFeatures, onOpenSe
 
 
 function Reports() {
-  const [stats, setStats] = useState({ books: null, copies: null, activeLoans: null, waitingReservations: null })
+  const [stats, setStats] = useState({ books: null, copies: null, availableCopies: null, activeLoans: null, openReservations: null, overdueLoans: null })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [retryKey, setRetryKey] = useState(0)
 
   useEffect(() => {
     let active = true
@@ -782,21 +874,27 @@ function Reports() {
         if (active) setLoading(false)
         return
       }
+      setLoading(true)
+      setError('')
       try {
-        const [books, copies, loans, reservations] = await Promise.all([
+        const [books, copies, availableCopies, loans, openReservations, overdueLoans] = await Promise.all([
           supabase.from('books').select('id', { count: 'exact', head: true }),
           supabase.from('book_copies').select('id', { count: 'exact', head: true }),
+          supabase.from('book_copies').select('id', { count: 'exact', head: true }).eq('status', 'available'),
           supabase.from('loans').select('id', { count: 'exact', head: true }).in('status', ['borrowed', 'overdue']),
-          supabase.from('reservations').select('id', { count: 'exact', head: true }).eq('status', 'waiting'),
+          supabase.from('reservations').select('id', { count: 'exact', head: true }).in('status', ['waiting', 'ready_for_pickup']),
+          supabase.from('loans').select('id', { count: 'exact', head: true }).eq('status', 'overdue'),
         ])
         if (!active) return
-        const failed = [books, copies, loans, reservations].find((result) => result.error)
+        const failed = [books, copies, availableCopies, loans, openReservations, overdueLoans].find((result) => result.error)
         if (failed?.error) setError('Unable to load report data. Please try again.')
         setStats({
           books: books.error ? null : books.count ?? 0,
           copies: copies.error ? null : copies.count ?? 0,
+          availableCopies: availableCopies.error ? null : availableCopies.count ?? 0,
           activeLoans: loans.error ? null : loans.count ?? 0,
-          waitingReservations: reservations.error ? null : reservations.count ?? 0,
+          openReservations: openReservations.error ? null : openReservations.count ?? 0,
+          overdueLoans: overdueLoans.error ? null : overdueLoans.count ?? 0,
         })
       } catch (loadError) {
         if (import.meta.env.DEV) console.error('[dashboard] reports failed', loadError)
@@ -807,7 +905,7 @@ function Reports() {
     }
     loadStats()
     return () => { active = false }
-  }, [])
+  }, [retryKey])
 
   const reportValue = (value, label) => loading ? 'Loading' : value === null ? 'Not available' : `${value} ${label}`
 
@@ -820,13 +918,16 @@ function Reports() {
           <p className="muted">Live summaries of the current collection, circulation, and reservation records.</p>
         </div>
       </div>
-      <div className="report-grid">
-        <article className="section-panel"><span>Catalog report</span><strong>{reportValue(stats.books, 'books')}</strong><small>{loading ? 'Loading catalog totals...' : stats.copies === null ? 'Copy total not available.' : `${stats.copies} physical copies in the catalog.`}</small></article>
-        <article className="section-panel"><span>Circulation report</span><strong>{reportValue(stats.activeLoans, 'active loans')}</strong><small>Borrowed and overdue items.</small></article>
-        <article className="section-panel"><span>Reservation report</span><strong>{reportValue(stats.waitingReservations, 'waiting')}</strong><small>Reservations awaiting fulfillment.</small></article>
+      <div className="report-grid staff-report-grid">
+        <article className="section-panel"><span>Catalog titles</span><strong>{reportValue(stats.books, 'titles')}</strong><small>Distinct book records.</small></article>
+        <article className="section-panel"><span>Physical copies</span><strong>{reportValue(stats.copies, 'copies')}</strong><small>All registered copy records.</small></article>
+        <article className="section-panel"><span>Available copies</span><strong>{reportValue(stats.availableCopies, 'available')}</strong><small>Copies ready to check out.</small></article>
+        <article className="section-panel"><span>Books checked out</span><strong>{reportValue(stats.activeLoans, stats.activeLoans === 1 ? 'book' : 'books')}</strong><small>Currently borrowed or overdue.</small></article>
+        <article className="section-panel"><span>Open reservations</span><strong>{reportValue(stats.openReservations, 'holds')}</strong><small>Waiting or ready for pickup.</small></article>
+        <article className="section-panel"><span>Overdue books</span><strong>{reportValue(stats.overdueLoans, stats.overdueLoans === 1 ? 'book' : 'books')}</strong><small>Borrowed books past their due date.</small></article>
       </div>
-      {error && <div className="inline-error" role="alert">{error}</div>}
-      {!loading && !error && <div className="empty-state">Live summary counts are shown above. There are no additional report rows to display.</div>}
+      {error && <div className="inline-error with-action" role="alert"><span>{error}</span><button type="button" className="retry-button" onClick={() => setRetryKey((current) => current + 1)}>Try again</button></div>}
+      <p className="report-footnote">These are live counts from the current library records; they do not include archived or deleted data.</p>
     </section>
   )
 }
@@ -956,7 +1057,7 @@ function Dashboard() {
         />)}
         {displayedSection === 'catalog' && <CatalogPage onBack={() => setActiveSection('dashboard')} role={role} />}
         {displayedSection === 'my-books' && <MemberBooks userId={session?.user?.id} />}
-        {displayedSection === 'reservations' && (role === 'member' ? <MemberReservations userId={session?.user?.id} /> : <StaffReservations />)}
+        {displayedSection === 'reservations' && (role === 'member' ? <MemberReservations userId={session?.user?.id} /> : <StaffReservations onBack={() => setActiveSection('dashboard')} />)}
         {displayedSection === 'history' && <MemberHistory userId={session?.user?.id} />}
         {displayedSection === 'notifications' && <MemberNotifications userId={session?.user?.id} />}
         {displayedSection === 'profile' && <MemberProfile userId={session?.user?.id} session={session} profile={profile} />}
@@ -968,6 +1069,7 @@ function Dashboard() {
         {displayedSection === 'circulation' && <StaffCirculation onBack={() => setActiveSection('dashboard')} />}
         {displayedSection === 'overdue' && <StaffOverdue />}
         {displayedSection === 'user-management' && <AdminPanel userId={session?.user?.id} onBack={() => setActiveSection('dashboard')} />}
+        {displayedSection === 'activity-logs' && isAdministrator && <ActivityLogs />}
         {displayedSection === 'reports' && <Reports />}
         {displayedSection === 'transactions' && <TransactionHistory />}
         </Suspense>
@@ -988,6 +1090,8 @@ function App() {
   }
 
   if (session && !profile) return <div className="empty-state" role="alert"><p>{error || 'Unable to load your library profile.'}</p><button onClick={() => window.location.reload()}>Retry</button><button onClick={signOut}>Sign out</button></div>
+
+  if (session && profile?.role === 'member' && !profile.member_linked) return <MemberAccountLink session={session} profile={profile} />
 
   if (session) return <Dashboard />
 

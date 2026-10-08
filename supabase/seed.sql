@@ -1,7 +1,6 @@
--- Illustrative catalog records for IBACMI's published academic programs.
--- These are sample references, not verified library holdings. No physical
--- copies are seeded, so the records cannot be checked out as available stock.
-with sample_books(title, author, category, course_subject) as (
+-- Seed catalog title metadata only. Physical holdings must be registered by
+-- library staff; this seed does not invent copies, ISBNs, or publication data.
+with catalog_books(title, author, category, course_subject) as (
   values
     ('Database System Concepts', 'Abraham Silberschatz, Henry F. Korth, S. Sudarshan', 'Information Technology', 'BSIT / Database Management'),
     ('Computer Networking: A Top-Down Approach', 'James F. Kurose, Keith W. Ross', 'Information Technology', 'BSIT / Computer Networks'),
@@ -18,18 +17,16 @@ with sample_books(title, author, category, course_subject) as (
     ('Introduction to Hospitality', 'John R. Walker, Josielyn T. Walker', 'Hospitality Management', 'BSHM / Hospitality Management'),
     ('On Cooking: A Textbook of Culinary Fundamentals', 'Sarah R. Labensky, Alan M. Hause, Priscilla A. Martel', 'Hospitality Management', 'BSHM / Culinary Fundamentals')
 )
-insert into public.books (title, author, category, course_subject, description)
+insert into public.books (title, author, category, course_subject)
 select
-  sample.title,
-  sample.author,
-  sample.category,
-  sample.course_subject,
-  'SAMPLE RECORD - Illustrative reference for ' || sample.course_subject ||
-    '. Not verified as an IBACMI Library holding; ask staff before treating it as available.'
-from sample_books as sample
+  catalog.title,
+  catalog.author,
+  catalog.category,
+  catalog.course_subject
+from catalog_books as catalog
 where not exists (
   select 1
   from public.books as existing
-  where lower(existing.title) = lower(sample.title)
-    and lower(existing.author) = lower(sample.author)
+  where lower(existing.title) = lower(catalog.title)
+    and lower(existing.author) = lower(catalog.author)
 );

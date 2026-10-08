@@ -278,6 +278,11 @@ export function StaffInventoryAudit() {
     {(error || message) && <div className={error ? 'inline-error' : 'inline-success'} role={error ? 'alert' : 'status'}>{error || message}</div>}
     {loading ? <div className="empty-state loading-state">Loading stock audit...</div> : audit ? <>
       <div className="section-heading"><div><h3>Audit in progress</h3><p className="muted">Started {formattedDate(audit.started_at)} · {scannedCount} of {expectedCount} expected copies scanned.</p></div><button type="button" className="primary-button" onClick={() => setShowComplete(true)} disabled={busy}>Finish audit</button></div>
+      <div className="audit-progress" aria-label="Stock audit progress">
+        <div><strong>Audit progress</strong><span>{expectedCount ? Math.round((scannedCount / expectedCount) * 100) : 0}%</span></div>
+        <progress value={scannedCount} max={Math.max(expectedCount, 1)} aria-label={`${scannedCount} of ${expectedCount} expected copies scanned`} />
+        <small>{scannedCount} scanned of {expectedCount} expected shelf copies</small>
+      </div>
       <form className="tool-form" onSubmit={scanCopy}>
         <h3>Scan a physical copy</h3>
         <div className="form-row">

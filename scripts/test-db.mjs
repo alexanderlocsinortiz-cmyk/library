@@ -31,19 +31,21 @@ try {
   started = true
   sql('create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;')
   const bootstrap = `    create schema auth;
-    create table auth.users(id uuid primary key, raw_user_meta_data jsonb default '{}', raw_app_meta_data jsonb default '{}');
+    create table auth.users(id uuid primary key, email text unique, email_confirmed_at timestamptz, raw_user_meta_data jsonb default '{}', raw_app_meta_data jsonb default '{}');
     create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
     create function auth.role() returns text language sql stable as $$select nullif(current_setting('request.jwt.claim.role',true),'')$$;
     grant usage on schema public,auth to anon,authenticated,service_role;
     grant execute on all functions in schema auth to anon,authenticated,service_role;
     alter default privileges in schema public grant all on tables to anon,authenticated,service_role;
-    alter default privileges in schema public grant all on sequences to anon,authenticated,service_role;`
+    alter default privileges in schema public grant all on sequences to anon,authenticated,service_role;
+    alter default privileges in schema public grant execute on functions to anon,authenticated,service_role;`
   sql(bootstrap)
   for (const migration of readdirSync('supabase/migrations').filter((name) => name.endsWith('.sql')).sort()) {
     run('psql', [...conn, '--single-transaction', '-f', resolve('supabase/migrations', migration)])
     console.log(`Installed ${migration}`)
   }
   file(resolve('supabase/tests/integrity.sql'))
+  file(resolve('supabase/tests/activity_logs.sql'))
   console.log('Database authorization and workflow assertions passed')
   const staff = `set role authenticated; set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';`
   const promotions = await Promise.all([1,2].map(() => concurrentSql(`${staff} select public.promote_next_reservation('20000000-0000-0000-0000-000000000002');`)))

@@ -100,10 +100,10 @@ function hasMemberActivity(series) {
   return series.some((item) => item.members?.size > 0)
 }
 
-function AnalyticsPanel({ eyebrow, title, children, error, headerAction }) {
+function AnalyticsPanel({ eyebrow, title, children, error, headerAction, onRetry }) {
   return <section className="analytics-panel">
     <div className="analytics-panel-heading"><div><span className="eyebrow">{eyebrow}</span><h3>{title}</h3></div>{headerAction}</div>
-    {error ? <div className="analytics-error">Unable to load analytics.</div> : children}
+    {error ? <div className="analytics-error" role="alert"><span>Unable to load analytics.</span><button type="button" className="retry-button" onClick={onRetry}>Try again</button></div> : children}
   </section>
 }
 
@@ -157,7 +157,7 @@ function LineChart({ data }) {
   const labelEvery = Math.max(1, Math.ceil(data.length / 5))
 
   return <div className="chart-wrap line-chart-wrap" onMouseLeave={() => setHoverIndex(null)}>
-    <svg className="analytics-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Loans and returns line chart">
+    <svg className="analytics-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Books borrowed and returned line chart">
       {[0, .25, .5, .75, 1].map((ratio) => {
         const y = padding.top + plotHeight * ratio
         const value = Math.round(maxValue * (1 - ratio))
@@ -172,8 +172,8 @@ function LineChart({ data }) {
         {(index === 0 || index === data.length - 1 || index % labelEvery === 0) && <text className="chart-x-label" x={point.x} y={height - 10} textAnchor={index === 0 ? 'start' : index === data.length - 1 ? 'end' : 'middle'}>{dateLabel(point.start)}</text>}
       </g>)}
     </svg>
-    {hoverPoint && <div className="chart-tooltip" style={{ left: `${(hoverPoint.x / width) * 100}%`, top: `${(Math.min(hoverPoint.loansY, hoverPoint.returnsY) / height) * 100}%` }}><strong>{dateRangeLabel(hoverPoint.start, hoverPoint.end)}</strong><span><i className="tooltip-dot navy-dot" />Loans: {hoverPoint.loans}</span><span><i className="tooltip-dot green-dot" />Returns: {hoverPoint.returns}</span></div>}
-    <ChartLegend items={[{ label: 'Loans', color: '#00263d' }, { label: 'Returns', color: '#4e8b65' }]} />
+    {hoverPoint && <div className="chart-tooltip" style={{ left: `${(hoverPoint.x / width) * 100}%`, top: `${(Math.min(hoverPoint.loansY, hoverPoint.returnsY) / height) * 100}%` }}><strong>{dateRangeLabel(hoverPoint.start, hoverPoint.end)}</strong><span><i className="tooltip-dot navy-dot" />Books borrowed: {hoverPoint.loans}</span><span><i className="tooltip-dot green-dot" />Books returned: {hoverPoint.returns}</span></div>}
+    <ChartLegend items={[{ label: 'Books borrowed', color: '#00263d' }, { label: 'Books returned', color: '#4e8b65' }]} />
   </div>
 }
 
@@ -241,6 +241,7 @@ export function AnalyticsSection({ userId }) {
   const [series, setSeries] = useState([])
   const [categories, setCategories] = useState([])
   const [errors, setErrors] = useState({ circulation: false, collection: false, members: false })
+  const [retryKey, setRetryKey] = useState(0)
 
   const range = useMemo(() => getRange(rangeKey), [rangeKey])
 
@@ -281,7 +282,7 @@ export function AnalyticsSection({ userId }) {
 
     loadAnalytics()
     return () => { active = false }
-  }, [range, rangeKey, userId])
+  }, [range, rangeKey, userId, retryKey])
 
   const totalBooks = categories.reduce((sum, item) => sum + item.count, 0)
   const selectedRangeLabel = RANGE_OPTIONS.find((option) => option.value === rangeKey)?.label || 'Last 30 days'
@@ -290,13 +291,13 @@ export function AnalyticsSection({ userId }) {
 
   return <section className="analytics-section dashboard-analytics-section" aria-label="Library analytics">
     <div className="analytics-grid">
-      <AnalyticsPanel eyebrow="Circulation" title="Loans and Returns" error={errors.circulation} headerAction={rangeSelect}>
+      <AnalyticsPanel eyebrow="Circulation" title="Books Borrowed and Returned" error={errors.circulation} headerAction={rangeSelect} onRetry={() => setRetryKey((current) => current + 1)}>
         {loading ? <ChartSkeleton /> : !hasCirculation(series) ? <EmptyAnalyticsState title="No circulation recorded" description="Checkouts and returns will appear here once staff record them." /> : <LineChart data={series} />}
       </AnalyticsPanel>
-      <AnalyticsPanel eyebrow="Collection" title="Collection by Category" error={errors.collection}>
+      <AnalyticsPanel eyebrow="Collection" title="Collection by Category" error={errors.collection} onRetry={() => setRetryKey((current) => current + 1)}>
         {loading ? <ChartSkeleton /> : totalBooks === 0 ? <EmptyCollectionChart /> : <DonutChart data={categories} total={totalBooks} />}
       </AnalyticsPanel>
-      <AnalyticsPanel eyebrow="Members" title="Member Activity" error={errors.members}>
+      <AnalyticsPanel eyebrow="Members" title="Member Activity" error={errors.members} onRetry={() => setRetryKey((current) => current + 1)}>
         {loading ? <ChartSkeleton /> : !hasMemberActivity(series) ? <EmptyAnalyticsState title="No member activity yet" description="Member activity will appear here as circulation is recorded." /> : <BarChart data={series} />}
       </AnalyticsPanel>
     </div>

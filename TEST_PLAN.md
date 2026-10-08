@@ -5,8 +5,12 @@ Run the app with `npm run dev` and use a test Supabase project or test records.
 ## Authentication
 
 - [ ] Browse the catalog without signing in.
-- [ ] Confirm a person can be registered and checked out without creating an Auth account.
-- [ ] Confirm an optional account is linked only to a verified library member record.
+- [ ] Confirm a student can register using a name, email, School ID, and password.
+- [ ] Confirm email confirmation is required before sign-in and account linking.
+- [ ] Confirm the account cannot access member pages until the School ID, library card, and staff-issued PIN link it to a verified member record.
+- [ ] Confirm the registered student can subsequently sign in with either email or School ID and the same password.
+- [ ] Confirm duplicate email, mismatched School ID, wrong card/PIN, and a card already linked to another account are rejected without exposing another member's data.
+- [ ] Confirm students can still search and borrow through staff without creating an Auth account.
 - [ ] Confirm a legacy School ID claim without a consumed staff invitation is not auto-linked to its borrower record.
 - [ ] Sign out and sign back in.
 - [ ] Confirm an invalid password is rejected.
@@ -74,8 +78,13 @@ Run the app with `npm run dev` and use a test Supabase project or test records.
 - [ ] As staff, scan a member card and copy barcode to check out a copy to a person with no login.
 - [ ] Confirm the loan is linked to the library member record, not an Auth requirement.
 - [ ] As staff, add a card-verified member to the queue for an owned title with no available copies.
+- [ ] Set a private online reservation PIN for a cardholder in Members; confirm the saved member has no login account.
+- [ ] From the public catalog, join the queue with that card number and PIN; confirm queue position appears and a wrong PIN reveals no member or reservation information.
+- [ ] Check the accountless cardholder's active holds and pickup deadline, then cancel a hold and confirm its assigned copy is released to the next person.
+- [ ] Confirm five incorrect PIN attempts temporarily block card-based reservation lookup and hold actions.
+- [ ] Confirm the card/PIN flow cannot reserve an available title, a title with no physical copies, or a title without any circulating/assigned copies.
 - [ ] Confirm a title with no physical copies cannot be put in the hold queue and staff sees the acquisition-request guidance.
-- [ ] Confirm an optional account linked through a verified School ID can view only that member's loans and reservations.
+- [ ] Confirm a registered account linked through verified card/PIN can view only that member's loans and reservations.
 - [ ] Link a legacy account only after staff verifies the physical card and matching School ID; confirm the action is audited.
 - [ ] Confirm a duplicate active reservation is not created.
 - [ ] As a Librarian, open Borrow / Return.
@@ -153,13 +162,15 @@ Run the app with `npm run dev` and use a test Supabase project or test records.
 - [ ] Confirm only Librarians and Administrators can manage catalog and circulation records.
 - [ ] Confirm only Administrators can manage system settings and roles.
 - [ ] Confirm the policy form cannot be used by Members or Librarians.
+- [ ] Confirm the anonymous role cannot execute privileged circulation, identity, analytics, or administration RPCs; its only reservation RPCs require the card number and PIN.
 
 ## Final acceptance gates
 
 The current policy defaults are temporary and configurable. Keep them pending librarian confirmation. Before production use:
 
 - [ ] Replace the dead Supabase URL with the real project URL.
-- [ ] On a verified staging database, apply pending migrations in order through 011; reconcile its schema and take a restorable backup before production migration.
+- [ ] On a verified staging database, apply pending migrations in order through 014; reconcile its schema and take a restorable backup before production migration.
+- [ ] In hosted Auth, enable email sign-ups, require email confirmation, and allow-list the deployed app URL for confirmation redirects.
 - [ ] Confirm the 3-day loan, 5 active-loan, 3-day pickup-hold, and no-monetary-fine temporary defaults with the librarian; the interview does not specify the maximum loan count, fine amount, or hold expiry.
 - [ ] Confirm the five-minute circulation scheduler runs and its heartbeat is monitored externally; staff page visits are not a scheduler.
 - [ ] Complete the live role, RLS, checkout, return, renewal, expiry, and notification scenarios above.
@@ -179,6 +190,9 @@ Run these migrations in Supabase SQL Editor, in order:
 - [ ] `supabase/migrations/009_interview_loan_period.sql`
 - [ ] `supabase/migrations/010_staff_managed_members.sql`
 - [ ] `supabase/migrations/011_interview_workflows.sql`
+- [ ] `supabase/migrations/012_revoke_anonymous_rpc_execution.sql`
+- [ ] `supabase/migrations/013_card_pin_reservations.sql`
+- [ ] `supabase/migrations/014_member_email_registration.sql`
 
 Before migration 010 on a verified staging backup, review `supabase/tests/member_migration_impact_preview.sql`. It counts profiles that will become member records, physical cards that need verification, and legacy School IDs that lack an invitation-verification record.
 
@@ -190,7 +204,8 @@ Run `npm run test:db`, `npm test`, `npm run check:edge`, `npm run lint`, and `np
 - [ ] Apply all migrations transactionally to a fresh Supabase project and an upgraded 004 fixture.
 - [ ] Use member and staff JWTs through the REST API to attempt direct reservation/loan/copy-status/profile/audit writes; verify rejection.
 - [ ] Try backdated/ready reservations, another member's cancellation, and unauthorized function calls.
-- [ ] Confirm public sign-up is disabled in the hosted Supabase project and the School ID Edge Function rejects `sign-up`; recovery invitations remain single-use for legacy accounts.
+- [ ] Verify anonymous access is limited to card/PIN reservation RPCs; test wrong PINs, lockout, own-hold lookup/cancellation, and confirm no member data or PIN hash is readable.
+- [ ] Confirm public registration creates member-role profiles only, requires email confirmation, and cannot assign a staff role; School ID sign-in resolves only verified linked member accounts; recovery invitations remain single-use.
 - [ ] Issue and redeem a separate recovery invitation, verify the new password, old password rejection, other refresh session revocation, and documented access-token expiry behavior.
 - [ ] Use two held copies for two members; check out the second member first. Reject collection by the wrong member and premature manual completion.
 - [ ] Cancel and expire holds; verify the next waiting member receives a physical copy and notification.

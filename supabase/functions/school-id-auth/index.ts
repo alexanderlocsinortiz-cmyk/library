@@ -21,13 +21,10 @@ function isValidSchoolId(value: string) {
   return /^[A-Z0-9][A-Z0-9._-]{2,31}$/.test(value)
 }
 
-async function internalEmailFor(schoolId: string) {
-  const bytes = new TextEncoder().encode(schoolId)
-  const digest = await crypto.subtle.digest('SHA-256', bytes)
-  const hash = Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('')
-  return `school-${hash}@auth.library.invalid`
+function maskSchoolId(value: string) {
+  const normalized = normalizeSchoolId(value)
+  if (normalized.length < 3) return '***'
+  return `${normalized.slice(0, 2)}***${normalized.slice(-2)}`
 }
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
@@ -45,7 +42,7 @@ Deno.serve(async (request) => {
   try {
     const body = await request.json()
     const action = body?.action
-    if (action === 'sign-up') return json({ ok: false, error: { message: 'Online member registration is disabled. Ask library staff for desk access.' } }, 403)
+    if (action === 'sign-up') return json({ ok: false, error: { message: 'Use email registration to create an account. This service only signs in verified School ID accounts.' } }, 403)
     if (!['sign-in', 'recover'].includes(action)) return json({ ok: false, error: { message: 'Invalid action.' } }, 400)
     const schoolId = normalizeSchoolId(body?.schoolId)
     const password = String(body?.password ?? '')
@@ -57,34 +54,94 @@ Deno.serve(async (request) => {
     if (!isValidSchoolId(schoolId)) {
       return json({ ok: false, error: { message: 'Enter a valid school ID using 3-32 letters, numbers, dots, underscores, or hyphens.' } })
     }
-    if (password.length < (action === 'sign-in' ? 6 : 12) || password.length > 128) {
+    if (action === 'sign-in' && (password.length < 6 || password.length > 128)) {
+      return json({ ok: false, error: { message: 'Invalid email, School ID, or password.' } })
+    }
+    if (action === 'recover' && (password.length < 12 || password.length > 128)) {
       return json({ ok: false, error: { message: 'New passwords must contain 12–128 characters.' } })
     }
-    const internalEmail = await internalEmailFor(schoolId)
     const admin = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     })
     const auth = createClient(supabaseUrl, anonKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     })
+    const recordActivity = async (
+      activity: 'login_success' | 'failed_login' | 'password_changed',
+      userId?: string,
+    ) => {
+      let actorName = 'Unknown account'
+      let actorRole = 'unknown'
+      if (userId) {
+        const { data: profile, error: profileError } = await admin.from('profiles')
+          .select('full_name, role').eq('id', userId).maybeSingle()
+        if (profileError) console.error('[school-id-auth] activity profile lookup failed', profileError.code ?? 'unknown')
+        actorName = profile?.full_name || 'Library user'
+        actorRole = profile?.role || 'unknown'
+      }
+      const description = activity === 'failed_login'
+        ? `Failed login attempt for School ID ${maskSchoolId(schoolId)}.`
+        : activity === 'password_changed'
+          ? 'Changed an account password through recovery.'
+          : 'Signed in successfully with a School ID.'
+      const { error: logError } = await admin.from('activity_logs').insert({
+        actor_user_id: userId ?? null,
+        actor_name_snapshot: actorName,
+        actor_role_snapshot: actorRole,
+        action: activity,
+        module: 'authentication',
+        description,
+        entity_type: 'account',
+        entity_id: userId ?? null,
+        status: activity === 'failed_login' ? 'failure' : 'success',
+      })
+      if (logError) console.error('[school-id-auth] activity write failed', logError.code ?? 'unknown')
+    }
     const { data: allowed, error: limitError } = await admin.rpc('allow_school_auth', { p_school_id: schoolId })
-    if (limitError || !allowed) return json({ ok: false, error: { message: 'Too many attempts or authentication unavailable. Try again in 15 minutes.' } }, 429)
+    if (limitError || !allowed) {
+      if (action === 'sign-in') {
+        // Log the attempt once the server has applied the School ID throttle.
+        const { error: logError } = await admin.from('activity_logs').insert({
+          actor_name_snapshot: 'Unknown account', actor_role_snapshot: 'unknown',
+          action: 'failed_login', module: 'authentication',
+          description: `Failed login attempt for School ID ${maskSchoolId(schoolId)}.`,
+          entity_type: 'account', status: 'failure',
+        })
+        if (logError) console.error('[school-id-auth] activity write failed', logError.code ?? 'unknown')
+      }
+      return json({ ok: false, error: { message: 'Too many attempts or authentication unavailable. Try again in 15 minutes.' } }, 429)
+    }
 
+    let signInEmail = ''
     if (action === 'recover') {
       const { data: userId, error: recoveryError } = await admin.rpc('consume_school_recovery', { p_school_id: schoolId, p_token: invitation })
       if (recoveryError || !userId) return json({ ok: false, error: { message: 'Invalid or expired recovery invitation.' } })
       const { error: resetError } = await admin.auth.admin.updateUserById(userId, { password })
       if (resetError) return json({ ok: false, error: { message: 'Recovery failed. Ask staff for a new invitation.' } })
+      await recordActivity('password_changed', userId)
+      const { data: userResult, error: userError } = await admin.auth.admin.getUserById(userId)
+      if (userError || !userResult.user?.email) return json({ ok: false, error: { message: 'Recovery failed. Ask staff for a new invitation.' } })
+      signInEmail = userResult.user.email
+    } else {
+      const { data: resolvedEmail, error: resolveError } = await admin.rpc('school_login_email', { p_school_id: schoolId })
+      if (resolveError || typeof resolvedEmail !== 'string' || !resolvedEmail) {
+        await recordActivity('failed_login')
+        return json({ ok: false, error: { message: 'Invalid email, School ID, or password.' } })
+      }
+      signInEmail = resolvedEmail
     }
 
     const { data, error: signInError } = await auth.auth.signInWithPassword({
-      email: internalEmail,
+      email: signInEmail,
       password,
     })
 
     if (signInError || !data.session) {
-      return json({ ok: false, error: { message: 'The school ID or password is incorrect.' } })
+      await recordActivity('failed_login')
+      return json({ ok: false, error: { message: 'Invalid email, School ID, or password.' } })
     }
+
+    await recordActivity('login_success', data.user.id)
 
     if (action === 'recover') {
       const { error: revokeError } = await admin.auth.admin.signOut(data.session.access_token, 'others')

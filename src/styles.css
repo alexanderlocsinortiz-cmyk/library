@@ -32,10 +32,12 @@ code { background: #f7e6e4; border-radius: .3rem; padding: .15rem .35rem; font-s
 .tab.active { border-color: #ece1e1; background: #fff; color: #8d0000; box-shadow: 0 .18rem .5rem rgba(0, 38, 61, .07); }
 .card-heading p { margin: 0; font-size: .95rem; line-height: 1.55; }
 .auth-card form { display: grid; gap: 1rem; margin-top: 1.6rem; }
-.auth-method-switch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .25rem; padding: .25rem; border: 1px solid #e7ebed; border-radius: .7rem; background: #f3f5f6; }
-.auth-method-switch button { min-height: 2.25rem; border: 1px solid transparent; border-radius: .5rem; padding: .55rem .75rem; background: transparent; color: #667681; font-size: .78rem; font-weight: 800; }
-.auth-method-switch button.active { border-color: #ece1e1; background: #fff; color: #8d0000; box-shadow: 0 .18rem .5rem rgba(0, 38, 61, .07); }
-.auth-method-switch button:focus-visible { outline: 3px solid rgba(164, 0, 0, .24); outline-offset: 2px; }
+.auth-card .auth-form { gap: .75rem; margin-top: 1.05rem; }
+.auth-text-link { justify-self: end; border: 0; padding: .15rem 0; background: transparent; color: #8d0000; font-size: .78rem; font-weight: 700; }
+.auth-text-link:hover { color: #650000; text-decoration: underline; }
+.auth-text-link:focus-visible { border-radius: .2rem; outline: 3px solid rgba(164, 0, 0, .2); outline-offset: 3px; }
+.auth-recovery-note { margin: 0; border-left: 3px solid #d8b6ba; padding: .55rem .7rem; color: #5d6d76; font-size: .75rem; line-height: 1.45; }
+.account-registration-note { border: 1px solid #eadcae; border-radius: .65rem; padding: .8rem .9rem; background: #fffaf0; color: #705613; font-size: .8rem; line-height: 1.55; }
 .phone-verification { display: grid; gap: .75rem; }
 .auth-card .MuiInputBase-input:-webkit-autofill, .auth-card .MuiInputBase-input:-webkit-autofill:hover, .auth-card .MuiInputBase-input:-webkit-autofill:focus { -webkit-text-fill-color: #00263d; -webkit-box-shadow: 0 0 0 1000px #fff inset; box-shadow: 0 0 0 1000px #fff inset; caret-color: #00263d; }
 .form-feedback { display: flex; align-items: flex-start; gap: .6rem; margin: 0; border: 1px solid; border-radius: .65rem; padding: .72rem .8rem; font-size: .78rem; line-height: 1.45; }
@@ -614,21 +616,13 @@ label { color: var(--academic-ink); font-size: .8rem; letter-spacing: .01em; }
 .catalog-toolbar.single-search { padding: 0; border: 0; background: transparent; }
 .toolbar-field { min-width: 0; gap: .35rem; color: var(--academic-muted); font-size: .68rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .toolbar-field input, .toolbar-field select { margin-top: .1rem; font-size: .82rem; letter-spacing: normal; text-transform: none; }
-.catalog-result-count { margin: -.35rem 0 1rem; color: var(--academic-muted); font-size: .75rem; font-weight: 700; }
-.catalog-sample-label {
-  display: flex;
-  width: fit-content;
-  margin-top: .35rem;
-  border: 1px solid #ead9a8;
-  border-radius: 99rem;
-  padding: .22rem .45rem;
-  background: #fff8e6;
-  color: #765800 !important;
-  font-size: .61rem;
-  font-weight: 800;
-  line-height: 1.4;
+.catalog-filters .toolbar-field input,
+.catalog-filters .toolbar-field select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
 }
-.book-detail-content .catalog-sample-label { margin-top: .55rem; }
+.catalog-result-count { margin: -.35rem 0 1rem; color: var(--academic-muted); font-size: .75rem; font-weight: 700; }
 .book-card { min-height: 12.5rem; background: var(--academic-surface); transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
 .book-card:hover { border-color: #c99ca3; box-shadow: 0 .7rem 1.5rem rgba(16, 47, 70, .08); transform: translateY(-2px); }
 .book-info h3, .book-detail-content h2 { color: var(--academic-navy); }
@@ -990,6 +984,356 @@ img { max-width: 100%; }
   }
 }
 
+
+
+/* Compact, cover-first catalog browsing. */
+.catalog-page {
+  container: catalog-page / inline-size;
+  min-width: 0;
+}
+.catalog-page-header {
+  margin-bottom: .85rem;
+}
+.catalog-page .catalog-toolbar-panel {
+  margin: 0 0 1rem;
+  overflow: hidden;
+  border: 1px solid var(--academic-border);
+  border-radius: .85rem;
+  background: #fff;
+  box-shadow: 0 .25rem .8rem rgba(16, 47, 70, .035);
+}
+.catalog-page .catalog-toolbar.catalog-filters {
+  grid-template-columns: minmax(14rem, 2fr) repeat(4, minmax(7.5rem, 1fr));
+  gap: .65rem;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: .9rem 1rem .8rem;
+  background: transparent;
+}
+.catalog-page .catalog-filters .toolbar-field {
+  min-width: 0;
+  gap: .32rem;
+  color: var(--academic-muted);
+  font-size: .63rem;
+}
+.catalog-page .catalog-filters .toolbar-field input,
+.catalog-page .catalog-filters .toolbar-field select {
+  min-height: 2.45rem;
+  margin: 0;
+  border-color: #d7e0e4;
+  border-radius: .5rem;
+  padding: .5rem .65rem;
+  font-size: .76rem;
+}
+.catalog-page .catalog-filters .catalog-search-field input { min-height: 2.45rem; }
+.catalog-page .catalog-toolbar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .8rem;
+  min-height: 2.45rem;
+  border-top: 1px solid #edf0f2;
+  padding: .45rem 1rem;
+}
+.catalog-page .catalog-result-count {
+  margin: 0;
+  color: var(--academic-muted);
+  font-size: .69rem;
+  font-weight: 700;
+}
+.catalog-clear-filters {
+  min-height: 1.9rem;
+  border: 0;
+  border-radius: .35rem;
+  padding: .35rem .45rem;
+  background: transparent;
+  color: var(--academic-red-dark);
+  cursor: pointer;
+  font: inherit;
+  font-size: .7rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.catalog-clear-filters:hover { background: #fff5f5; text-decoration: underline; }
+.catalog-clear-filters:focus-visible { outline: 3px solid rgba(164, 0, 0, .18); outline-offset: 1px; }
+.catalog-page .catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  align-items: stretch;
+  gap: .85rem;
+}
+.catalog-page .book-card {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: .45rem;
+  overflow: hidden;
+  border: 1px solid var(--academic-border);
+  border-radius: .75rem;
+  padding: .45rem;
+  background: #fff;
+  box-shadow: 0 .2rem .65rem rgba(16, 47, 70, .035);
+  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+.catalog-page .book-card:hover {
+  border-color: #c99ca3;
+  box-shadow: 0 .55rem 1.2rem rgba(16, 47, 70, .1);
+  transform: translateY(-2px);
+}
+.catalog-card-main {
+  display: grid;
+  grid-template-rows: auto minmax(6.75rem, 1fr);
+  gap: .48rem;
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  border-radius: .45rem;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+.catalog-card-main:focus-visible {
+  outline: 3px solid rgba(164, 0, 0, .23);
+  outline-offset: 2px;
+}
+.catalog-book-cover {
+  position: relative;
+  display: grid;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  place-items: center;
+  overflow: hidden;
+  border-radius: .55rem;
+  background: linear-gradient(145deg, var(--academic-red), var(--academic-navy));
+}
+.catalog-book-cover > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.catalog-cover-placeholder {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: .45rem;
+  overflow: hidden;
+  padding: .7rem;
+  background: linear-gradient(155deg, rgba(164, 0, 0, .96), rgba(0, 38, 61, .98));
+  color: #fff;
+}
+.catalog-cover-placeholder::before,
+.catalog-cover-placeholder::after {
+  position: absolute;
+  z-index: 0;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 50%;
+  content: '';
+  pointer-events: none;
+}
+.catalog-cover-placeholder::before { top: -22%; right: -35%; width: 95%; aspect-ratio: 1; }
+.catalog-cover-placeholder::after { top: -8%; right: -22%; width: 70%; aspect-ratio: 1; }
+.catalog-cover-placeholder > small,
+.catalog-cover-placeholder > strong { position: relative; z-index: 1; }
+.catalog-cover-placeholder > small {
+  font-size: .47rem;
+  font-weight: 800;
+  letter-spacing: .12em;
+  line-height: 1.35;
+}
+.catalog-cover-placeholder > strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: clamp(.62rem, .9vw, .82rem);
+  font-weight: 800;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+}
+.catalog-page .book-info {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: .28rem;
+  padding: 0 .12rem .15rem;
+}
+.catalog-card-title {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--academic-navy);
+  font-size: .84rem;
+  font-weight: 750;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.catalog-page .book-author {
+  display: -webkit-box;
+  max-width: 100%;
+  margin: 0;
+  overflow: hidden;
+  color: var(--academic-muted);
+  font-size: .7rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+.catalog-page .availability {
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 99rem;
+  padding: .17rem .38rem;
+  font-size: .57rem;
+  letter-spacing: .025em;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+.catalog-card-subject {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--academic-muted);
+  font-size: .61rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.catalog-card-reserve {
+  align-self: stretch;
+  min-height: 1.9rem;
+  border: 1px solid #e5cdd0;
+  border-radius: .45rem;
+  padding: .32rem .55rem;
+  background: #fff;
+  color: var(--academic-red-dark);
+  font-size: .68rem;
+  font-weight: 800;
+}
+.catalog-card-reserve:hover:not(:disabled) { border-color: var(--academic-red); background: #fff5f5; }
+.catalog-card-reserve:disabled { cursor: wait; opacity: .6; }
+.catalog-pagination-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1rem;
+  border-top: 1px solid var(--academic-border);
+  padding: .75rem .1rem 0;
+}
+.catalog-pagination-summary {
+  color: var(--academic-muted);
+  font-size: .72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.catalog-pagination-nav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: .3rem;
+}
+.catalog-page-arrow,
+.catalog-page-number {
+  display: inline-flex;
+  min-width: 2.1rem;
+  min-height: 2.15rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--academic-border);
+  border-radius: .45rem;
+  padding: .35rem .55rem;
+  background: #fff;
+  color: var(--academic-navy);
+  font-size: .69rem;
+  font-weight: 750;
+}
+.catalog-page-arrow { min-width: 4.6rem; }
+.catalog-page-arrow:hover:not(:disabled),
+.catalog-page-number:hover:not(.active) { border-color: #c99ca3; background: #fff7f6; color: var(--academic-red-dark); }
+.catalog-page-number.active { border-color: var(--academic-red); background: var(--academic-red); color: #fff; }
+.catalog-page-arrow:disabled { cursor: default; opacity: .45; }
+.catalog-page-arrow:focus-visible,
+.catalog-page-number:focus-visible,
+.catalog-card-reserve:focus-visible { outline: 3px solid rgba(164, 0, 0, .2); outline-offset: 2px; }
+.catalog-skeleton-card {
+  display: grid;
+  min-width: 0;
+  gap: .5rem;
+  border: 1px solid var(--academic-border);
+  border-radius: .75rem;
+  padding: .45rem;
+  background: #fff;
+}
+.catalog-skeleton-cover {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  border-radius: .55rem;
+  background: linear-gradient(100deg, #edf1f3 25%, #f8f9fa 45%, #edf1f3 65%);
+  background-size: 300% 100%;
+  animation: catalog-shimmer 1.4s ease-in-out infinite;
+}
+.catalog-skeleton-line,
+.catalog-skeleton-pill {
+  height: .65rem;
+  border-radius: 99rem;
+  background: linear-gradient(100deg, #edf1f3 25%, #f8f9fa 45%, #edf1f3 65%);
+  background-size: 300% 100%;
+  animation: catalog-shimmer 1.4s ease-in-out infinite;
+}
+.catalog-skeleton-line.title-line { width: 85%; height: .75rem; }
+.catalog-skeleton-line.author-line { width: 58%; }
+.catalog-skeleton-pill { width: 42%; height: .95rem; margin-top: .15rem; }
+@keyframes catalog-shimmer { to { background-position: -150% 0; } }
+
+@container catalog-page (max-width: 90rem) {
+  .catalog-page .catalog-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+@container catalog-page (max-width: 70rem) {
+  .catalog-page .catalog-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .catalog-page .catalog-toolbar.catalog-filters { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .catalog-page .catalog-search-field { grid-column: 1 / -1; }
+}
+@container catalog-page (max-width: 52rem) {
+  .catalog-page .catalog-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .catalog-page .catalog-toolbar.catalog-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .catalog-page .catalog-search-field { grid-column: 1 / -1; }
+}
+@container catalog-page (max-width: 36rem) {
+  .catalog-page .catalog-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
+  .catalog-page .catalog-toolbar.catalog-filters { grid-template-columns: minmax(0, 1fr); gap: .6rem; }
+  .catalog-page .catalog-search-field { grid-column: auto; }
+  .catalog-page .book-card { padding: .38rem; }
+  .catalog-page .catalog-toolbar.catalog-filters { padding: .75rem; }
+  .catalog-page .catalog-toolbar-footer { padding-inline: .75rem; }
+  .catalog-page-header { align-items: flex-start; }
+  .catalog-page-header .book-page-header-back { max-width: 7.2rem; white-space: normal; text-align: right; }
+  .catalog-pagination-footer { align-items: stretch; flex-direction: column; gap: .6rem; }
+  .catalog-pagination-summary { text-align: center; }
+  .catalog-pagination-nav { justify-content: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .catalog-skeleton-cover,
+  .catalog-skeleton-line,
+  .catalog-skeleton-pill { animation: none; }
+  .catalog-page .book-card:hover { transform: none; }
+}
+
 @container analytics-section (max-width: 68rem) {
   .analytics-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1264,6 +1608,426 @@ tbody tr:hover {
 .confirm-dialog {
   max-height: min(90dvh, 42rem);
   overflow-y: auto;
+}
+
+/* Staff operations: consistent summaries, clear workflows, and compact status panels. */
+.staff-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .8rem;
+  margin: .25rem 0 1.15rem;
+}
+.staff-summary-card {
+  display: grid;
+  align-content: space-between;
+  gap: .55rem;
+  min-width: 0;
+  min-height: 6.25rem;
+  padding: .9rem 1rem;
+  border: 1px solid var(--academic-border);
+  border-radius: .8rem;
+  background: #fff;
+  box-shadow: 0 .25rem .8rem rgba(16, 47, 70, .035);
+}
+.staff-summary-card > span {
+  color: var(--academic-muted);
+  font-size: .76rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.staff-summary-card > strong {
+  color: var(--academic-navy);
+  font-size: 1.65rem;
+  line-height: 1;
+  overflow-wrap: anywhere;
+}
+.staff-summary-card > strong.summary-date { font-size: 1rem; line-height: 1.35; }
+.circulation-workflow-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(17rem, .75fr);
+  grid-template-areas: "checkout return" "receipt receipt";
+  align-items: start;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.circulation-workflow-grid > .checkout-form { grid-area: checkout; }
+.circulation-workflow-grid > .return-form { grid-area: return; }
+.circulation-workflow-grid > .inline-success { grid-area: receipt; margin: 0; }
+.return-form h3 { margin: 0; }
+.return-form > div:first-child { margin-bottom: .15rem; }
+.return-form > div:first-child p { margin: .35rem 0 0; line-height: 1.5; }
+.staff-list-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 1.25rem 0 .75rem;
+}
+.book-page-header-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 1.1rem;
+  border: 1px solid var(--academic-border);
+  border-radius: .85rem;
+  padding: 1rem 1.15rem;
+  background: #fff;
+  box-shadow: 0 .2rem .65rem rgba(16, 47, 70, .035);
+}
+.book-page-header-copy { min-width: 0; }
+.book-page-header-copy .eyebrow { font-size: .6rem; letter-spacing: .12em; }
+.book-page-header-copy h2 {
+  margin: .18rem 0 .14rem;
+  color: var(--academic-navy);
+  font-size: clamp(1.4rem, 2vw, 1.75rem);
+  line-height: 1.1;
+  letter-spacing: -.04em;
+}
+.book-page-header-copy p { margin: 0; color: var(--academic-muted); font-size: .77rem; line-height: 1.45; }
+.book-page-header-back {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: .35rem;
+  margin: 0;
+  border: 0;
+  border-radius: .4rem;
+  padding: .3rem .15rem;
+  background: transparent;
+  color: var(--academic-red-dark);
+  cursor: pointer;
+  font: inherit;
+  font-size: .72rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.book-page-header-back:hover { color: var(--academic-red); text-decoration: underline; }
+.book-page-header-back:focus-visible { outline: 3px solid rgba(164, 0, 0, .18); outline-offset: 2px; }
+.book-page-header-back svg { width: .95rem; height: .95rem; }
+.book-management-card {
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--academic-border);
+  border-radius: .9rem;
+  background: #fff;
+  box-shadow: 0 .35rem 1.1rem rgba(16, 47, 70, .045);
+}
+.book-management-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.2rem 1.4rem;
+  border-bottom: 1px solid var(--academic-border);
+}
+.book-management-card-header h3 {
+  margin: 0;
+  color: var(--academic-navy);
+  font-size: 1.08rem;
+  font-weight: 800;
+  letter-spacing: -.02em;
+}
+.book-management-card-header p {
+  margin: .3rem 0 0;
+  color: var(--academic-muted);
+  font-size: .78rem;
+  line-height: 1.45;
+}
+.book-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .55rem;
+}
+.book-add-button,
+.book-add-copy-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  box-sizing: border-box;
+  height: 2.65rem;
+  min-height: 2.65rem;
+  border-radius: .5rem;
+  padding: .6rem .9rem;
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.book-add-copy-button {
+  border: 1px solid var(--academic-red);
+  background: #fff;
+  color: var(--academic-red-dark);
+  cursor: pointer;
+  transition: background-color .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
+}
+.book-add-copy-button:hover { border-color: var(--academic-red-dark); background: #fff5f5; }
+.book-add-copy-button:focus-visible { outline: 3px solid rgba(164, 0, 0, .18); outline-offset: 2px; }
+.book-add-button svg,
+.book-add-copy-button svg { width: 1rem; height: 1rem; }
+.book-filter-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(12rem, 3fr);
+  align-items: end;
+  gap: .9rem;
+  padding: 1rem 1.4rem .8rem;
+}
+.book-filter-field {
+  display: grid;
+  min-width: 0;
+  gap: .35rem;
+  color: var(--academic-muted);
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+}
+.book-search-input-wrap { position: relative; display: block; }
+.book-search-input-wrap > svg {
+  position: absolute;
+  top: 50%;
+  left: .8rem;
+  width: 1.05rem;
+  height: 1.05rem;
+  color: #758590;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+.book-filter-field input,
+.book-filter-field select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 2.65rem;
+  margin: 0;
+  border: 1px solid #d6e0e5;
+  border-radius: .55rem;
+  padding: .55rem .75rem;
+  background: #fff;
+  color: var(--academic-ink);
+  font: inherit;
+  font-size: .8rem;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.book-search-input-wrap input { padding-left: 2.35rem; }
+.book-filter-field input:focus,
+.book-filter-field select:focus {
+  border-color: var(--academic-red);
+  outline: 3px solid rgba(164, 0, 0, .1);
+}
+.book-list-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .8rem;
+  min-height: 2.6rem;
+  margin: 0 1.4rem;
+  border-bottom: 1px solid var(--academic-border);
+  color: var(--academic-muted);
+  font-size: .73rem;
+  font-weight: 700;
+}
+.book-clear-filters {
+  border: 0;
+  padding: .35rem 0 .35rem .5rem;
+  background: transparent;
+  color: var(--academic-red-dark);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.book-clear-filters:hover { text-decoration: underline; }
+.book-table-scroll { width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
+.book-management-table {
+  width: 100%;
+  min-width: 800px;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+.book-management-table .book-title-column { width: 25%; }
+.book-management-table .book-author-column { width: 18%; }
+.book-management-table .book-subject-column { width: 20%; }
+.book-management-table .book-count-column { width: 9%; }
+.book-management-table .book-actions-column { width: 19%; }
+.book-management-table thead { background: #f4f6f8; }
+.book-management-table th {
+  padding: .72rem .9rem;
+  border-bottom: 1px solid #e0e6e9;
+  color: #536671;
+  font-size: .65rem;
+  font-weight: 800;
+  letter-spacing: .045em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.book-management-table td {
+  padding: .65rem .9rem;
+  border-bottom: 1px solid #edf0f2;
+  color: var(--academic-ink);
+  font-size: .76rem;
+  line-height: 1.45;
+  vertical-align: middle;
+}
+.book-management-table tbody tr:last-child td { border-bottom: 0; }
+.book-management-table tbody tr:hover { background: #fafbfc; }
+.book-management-table .book-title-cell,
+.book-management-table .book-author-cell,
+.book-management-table .book-subject-cell { overflow-wrap: anywhere; white-space: normal; }
+.book-management-table .book-title-cell strong { color: var(--academic-navy); font-weight: 750; }
+.book-management-table .book-number-cell { text-align: center; font-variant-numeric: tabular-nums; }
+.book-management-table th.book-number-cell { text-align: center; }
+.book-management-table .book-actions-heading,
+.book-management-table tbody tr > td:last-child { text-align: right; }
+.book-row-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: .35rem; }
+.book-row-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .3rem;
+  min-height: 2rem;
+  border: 1px solid #dce3e7;
+  border-radius: .45rem;
+  padding: .35rem .5rem;
+  background: #fff;
+  color: var(--academic-navy);
+  cursor: pointer;
+  font: inherit;
+  font-size: .68rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.book-row-action:hover:not(:disabled) { border-color: #b8c7ce; background: #f8fafb; }
+.book-row-action svg { width: .85rem; height: .85rem; }
+.book-row-action:disabled { cursor: wait; opacity: .55; }
+.book-row-action.book-row-delete { border-color: #edd5d7; color: var(--academic-red-dark); }
+.book-row-action.book-row-delete:hover:not(:disabled) { border-color: #d7a9ae; background: #fff7f7; }
+.book-pagination-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 3.5rem;
+  border-top: 1px solid var(--academic-border);
+  padding: .65rem 1.4rem;
+}
+.book-pagination-summary,
+.book-page-status { color: var(--academic-muted); font-size: .7rem; font-weight: 700; white-space: nowrap; }
+.book-pagination-nav { display: flex; align-items: center; justify-content: flex-end; gap: .3rem; }
+.book-page-arrow,
+.book-page-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  min-height: 2rem;
+  border: 1px solid #dce3e7;
+  border-radius: .45rem;
+  padding: .35rem .55rem;
+  background: #fff;
+  color: var(--academic-navy);
+  cursor: pointer;
+  font: inherit;
+  font-size: .7rem;
+  font-weight: 750;
+}
+.book-page-arrow { min-width: 4.6rem; }
+.book-page-arrow:hover:not(:disabled),
+.book-page-number:hover:not(.active) { border-color: #bdcbd1; background: #f7f9fa; }
+.book-page-number.active { border-color: var(--academic-red); background: var(--academic-red); color: #fff; }
+.book-page-arrow:disabled { cursor: default; opacity: .45; }
+.book-title-dialog-form { padding: .25rem 0; border: 0; border-radius: 0; box-shadow: none; }
+.staff-list-heading h3 { margin: 0; }
+.staff-list-heading p { margin: .3rem 0 0; }
+.staff-list-heading > span { flex: 0 0 auto; color: var(--academic-muted); font-size: .82rem; font-weight: 700; }
+.secondary-tool-disclosure {
+  margin: 1rem 0 1.5rem;
+  border: 1px solid var(--academic-border);
+  border-radius: .8rem;
+  background: #fff;
+}
+.secondary-tool-disclosure > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: .95rem 1.1rem;
+  color: var(--academic-navy);
+  cursor: pointer;
+  font-weight: 750;
+  list-style-position: inside;
+}
+.secondary-tool-disclosure > summary small { color: var(--academic-muted); font-size: .78rem; font-weight: 500; }
+.secondary-tool-disclosure[open] > summary { border-bottom: 1px solid var(--academic-border); }
+.secondary-tool-disclosure > :not(summary) { margin: 1rem; }
+.admin-health-section { margin: 1.5rem 0; }
+.admin-health-section .staff-list-heading { margin-top: 0; }
+.audit-progress {
+  display: grid;
+  gap: .5rem;
+  margin: 0 0 1.25rem;
+  padding: .9rem 1rem;
+  border: 1px solid var(--academic-border);
+  border-radius: .75rem;
+  background: #fff;
+}
+.audit-progress > div { display: flex; align-items: center; justify-content: space-between; gap: .75rem; color: var(--academic-navy); }
+.audit-progress > div span { font-weight: 800; }
+.audit-progress progress { width: 100%; height: .7rem; accent-color: var(--academic-red); }
+.audit-progress small { color: var(--academic-muted); }
+.transaction-search + .inline-error { margin: 0 0 1rem; }
+.content-section > .catalog-result-count { margin: .25rem 0 .75rem; }
+.content-section > .empty-state.large p { margin: .5rem 0 0; color: var(--academic-muted); }
+.staff-report-grid .section-panel {
+  display: grid;
+  align-content: start;
+  min-height: 8.5rem;
+  padding: 1.15rem;
+  border-top: 3px solid var(--academic-red);
+}
+.staff-report-grid .section-panel:nth-child(3n + 2) { border-top-color: #c38308; }
+.staff-report-grid .section-panel:nth-child(3n) { border-top-color: var(--academic-navy); }
+.staff-report-grid .section-panel > span { font-size: .78rem; font-weight: 750; }
+.staff-report-grid .section-panel > strong { margin: .7rem 0 .4rem; color: var(--academic-navy); font-size: 1.35rem; }
+.staff-report-grid .section-panel > small { line-height: 1.45; }
+.report-footnote { margin: .8rem 0 0; color: var(--academic-muted); font-size: .82rem; line-height: 1.5; }
+.analytics-error { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: .75rem; min-height: 10rem; padding: 1.25rem; color: var(--academic-muted); text-align: center; }
+.analytics-error .retry-button { flex: 0 0 auto; }
+
+@media (max-width: 1050px) {
+  .circulation-workflow-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "checkout" "receipt" "return";
+  }
+}
+@media (max-width: 900px) {
+  .staff-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .staff-summary-grid { gap: .55rem; }
+  .staff-summary-card { min-height: 5.5rem; padding: .75rem; }
+  .staff-summary-card > strong { font-size: 1.4rem; }
+  .staff-list-heading { align-items: start; flex-direction: column; gap: .35rem; }
+  .book-page-header-card { gap: .55rem; padding: .9rem 1rem; }
+  .book-page-header-back { gap: .25rem; font-size: .66rem; }
+  .book-management-card-header { align-items: flex-start; flex-direction: column; padding: 1rem; }
+  .book-header-actions { width: 100%; }
+  .book-header-actions > button { flex: 1 1 0; }
+  .book-filter-toolbar { grid-template-columns: minmax(0, 1fr); gap: .7rem; padding: .85rem 1rem .7rem; }
+  .book-list-meta { margin: 0 1rem; }
+  .book-pagination-footer { align-items: stretch; flex-direction: column; gap: .65rem; padding: .85rem 1rem; }
+  .book-pagination-nav { justify-content: center; flex-wrap: wrap; }
+  .book-page-status { flex-basis: 100%; order: -1; text-align: center; }
+  .book-page-arrow, .book-page-number { min-height: 2.5rem; }
+  .secondary-tool-disclosure > summary { align-items: flex-start; flex-direction: column; gap: .3rem; }
+  .circulation-workflow-grid { gap: .75rem; }
+  .audit-progress { padding: .75rem; }
 }
 
 @media (hover: hover) {
@@ -1670,4 +2434,380 @@ tbody tr:hover {
     justify-items: center;
     text-align: center;
   }
+}
+
+/* Reservations desk: compact cards, filters, records, and queue controls. */
+.reservations-page {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 1rem;
+}
+.reservations-page-header { margin: 0; }
+.reservations-page > .inline-error,
+.reservations-page > .inline-success { margin: 0; }
+.reservation-create-card {
+  gap: .8rem;
+  border-color: var(--academic-border);
+  border-radius: .85rem;
+  padding: 1.1rem 1.2rem;
+  box-shadow: 0 .25rem .9rem rgba(16, 47, 70, .035);
+}
+.reservation-section-heading h3 { margin: 0; color: var(--academic-navy); font-size: 1.05rem; }
+.reservation-section-heading p,
+.reservation-records-header p { margin: .25rem 0 0; color: var(--academic-muted); font-size: .76rem; line-height: 1.5; }
+.reservation-create-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .85rem; }
+.reservation-create-fields label,
+.reservation-filter-toolbar > label {
+  display: grid;
+  min-width: 0;
+  gap: .35rem;
+  color: var(--academic-muted);
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+}
+.reservation-create-fields select,
+.reservation-filter-toolbar input,
+.reservation-filter-toolbar select {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.65rem;
+  border: 1px solid var(--academic-border);
+  border-radius: .55rem;
+  padding: .55rem .7rem;
+  background: #fff;
+  color: var(--academic-navy);
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.reservation-create-fields select:focus,
+.reservation-filter-toolbar input:focus,
+.reservation-filter-toolbar select:focus { outline: 3px solid rgba(164, 0, 0, .13); border-color: #b96a72; }
+.reservation-create-fields select:disabled { background: #f6f8f9; color: #87939b; cursor: not-allowed; }
+.reservation-form-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.reservation-form-footer .form-helper { max-width: 34rem; font-size: .72rem; }
+.reservation-form-footer .primary-button { min-height: 2.55rem; padding: .6rem .9rem; font-size: .76rem; white-space: nowrap; }
+.reservation-form-empty-help { color: var(--academic-red-dark); font-size: .72rem; }
+.reservation-records-card { min-width: 0; overflow: hidden; }
+.reservation-records-header { padding: 1.05rem 1.2rem .6rem; }
+.reservation-records-header h3 { margin: 0; color: var(--academic-navy); font-size: 1.05rem; }
+.reservation-filter-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, .38fr);
+  align-items: end;
+  gap: .8rem;
+  margin: 0 1.2rem;
+  border: 1px solid var(--academic-border);
+  border-radius: .7rem;
+  padding: .75rem;
+  background: #fbfcfc;
+}
+.reservation-search-control { position: relative; display: block; }
+.reservation-search-control > svg { position: absolute; top: 50%; left: .7rem; width: 1rem; height: 1rem; color: #788891; transform: translateY(-50%); pointer-events: none; }
+.reservation-search-control input { padding-left: 2rem; }
+.reservation-results-meta { display: flex; min-height: 2.6rem; align-items: center; justify-content: space-between; gap: .75rem; margin: 0 1.2rem; color: var(--academic-muted); font-size: .72rem; font-weight: 700; }
+.reservation-clear-filters { border: 0; padding: .3rem 0; background: transparent; color: var(--academic-red-dark); font-size: .72rem; font-weight: 800; }
+.reservation-clear-filters:hover { text-decoration: underline; }
+.reservation-table-wrap { border: 0; border-top: 1px solid var(--academic-border); border-radius: 0; box-shadow: none; }
+.reservation-table-wrap table { width: 100%; min-width: 740px; border-collapse: collapse; }
+.reservation-table-wrap th { padding: .65rem .85rem; background: #f5f7f8; color: #63737d; font-size: .64rem; text-align: left; }
+.reservation-table-wrap td { padding: .7rem .85rem; border-bottom: 1px solid #edf0f2; font-size: .75rem; vertical-align: middle; }
+.reservation-table-wrap tr:last-child td { border-bottom: 0; }
+.reservation-table-wrap td strong { color: var(--academic-navy); font-size: .75rem; }
+.reservation-table-wrap .table-subtext { display: block; margin-top: .18rem; color: var(--academic-muted); font-size: .65rem; line-height: 1.4; }
+.reservation-status-badge { white-space: nowrap; text-transform: none; }
+.reservation-status-badge[data-status="expired"] { border-color: #e8c4c9; background: #fbebed; color: var(--academic-red-dark); }
+.reservation-table-wrap .table-action { max-width: 12rem; white-space: normal; text-align: left; }
+.reservation-empty-state { display: flex; min-height: 7rem; align-items: center; justify-content: center; gap: .75rem; padding: 1rem; color: var(--academic-muted); }
+.reservation-empty-icon,
+.reservation-rules-icon { display: grid; flex: 0 0 auto; place-items: center; width: 2rem; height: 2rem; border-radius: .65rem; background: #f4f6f7; color: var(--academic-navy); }
+.reservation-empty-icon svg,
+.reservation-rules-icon svg { width: 1.1rem; height: 1.1rem; }
+.reservation-empty-state strong { display: block; color: var(--academic-navy); font-size: .8rem; }
+.reservation-empty-state p { margin: .2rem 0 0; font-size: .72rem; }
+.reservation-loading { display: flex; min-height: 6rem; align-items: center; justify-content: center; gap: .65rem; color: var(--academic-muted); font-size: .74rem; }
+.reservation-loading-bar { width: 4rem; height: .35rem; overflow: hidden; border-radius: 99rem; background: linear-gradient(90deg, #e7ecef 30%, #cdd9df 50%, #e7ecef 70%); background-size: 220% 100%; animation: reservation-loading-shimmer 1.1s ease-in-out infinite; }
+@keyframes reservation-loading-shimmer { to { background-position: -220% 0; } }
+.reservation-pagination-footer { display: flex; align-items: center; justify-content: space-between; gap: .8rem; border-top: 1px solid var(--academic-border); padding: .75rem 1.2rem; }
+.reservation-page-summary { color: var(--academic-muted); font-size: .7rem; font-weight: 700; }
+.reservation-pagination { display: flex; align-items: center; gap: .3rem; }
+.reservation-pagination button { min-width: 2rem; min-height: 2rem; border: 1px solid var(--academic-border); border-radius: .45rem; padding: .35rem .55rem; background: #fff; color: var(--academic-navy); font-size: .7rem; font-weight: 750; }
+.reservation-pagination button:hover:not(:disabled) { border-color: #c9979d; background: #fff8f8; color: var(--academic-red-dark); }
+.reservation-pagination button.active { border-color: var(--academic-red-dark); background: var(--academic-red-dark); color: #fff; }
+.reservation-pagination button:disabled { color: #9ca6ac; cursor: not-allowed; opacity: .65; }
+.reservation-rules-note { display: flex; align-items: flex-start; gap: .7rem; margin: 0; border-left-width: 2px; border-radius: .6rem; padding: .75rem .9rem; font-size: .75rem; }
+.reservation-rules-icon { width: 1.7rem; height: 1.7rem; background: rgba(255, 255, 255, .7); color: #77580b; }
+.reservation-rules-note strong { display: block; font-size: .75rem; }
+.reservation-rules-note p { margin: .2rem 0 0; line-height: 1.5; }
+
+@media (max-width: 640px) {
+  .reservations-page { gap: .75rem; }
+  .reservations-page-header { align-items: flex-start; }
+  .reservations-page-header .book-page-header-back { white-space: normal; text-align: right; }
+  .reservation-create-card { padding: .9rem; }
+  .reservation-create-fields { grid-template-columns: minmax(0, 1fr); gap: .65rem; }
+  .reservation-form-footer { align-items: flex-start; flex-direction: column; gap: .6rem; }
+  .reservation-form-footer .primary-button { align-self: flex-end; min-height: 2.65rem; }
+  .reservation-records-header { padding: .9rem .9rem .55rem; }
+  .reservation-filter-toolbar { grid-template-columns: minmax(0, 1fr); gap: .6rem; margin-inline: .75rem; padding: .65rem; }
+  .reservation-results-meta { margin-inline: .9rem; }
+  .reservation-pagination-footer { align-items: stretch; flex-direction: column; padding: .75rem .9rem; }
+  .reservation-page-summary { text-align: center; }
+  .reservation-pagination { justify-content: center; flex-wrap: wrap; }
+  .reservation-pagination button { min-height: 2.35rem; }
+  .reservation-rules-note { padding: .7rem; }
+}
+
+/* Staff-managed walk-in reservation form and record actions. */
+.walkin-reservation-form { gap: .85rem; }
+.walkin-form-section {
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--academic-border);
+  border-radius: .7rem;
+  padding: .8rem;
+}
+.walkin-form-section legend {
+  padding: 0 .35rem;
+  color: var(--academic-navy);
+  font-size: .76rem;
+  font-weight: 800;
+}
+.walkin-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .72rem .85rem;
+}
+.walkin-form-grid > label,
+.walkin-book-picker {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: .32rem;
+  color: var(--academic-muted);
+  font-size: .68rem;
+  font-weight: 750;
+  letter-spacing: .025em;
+}
+.walkin-form-grid input,
+.walkin-form-grid select,
+.walkin-form-grid textarea,
+.walkin-book-picker-control > input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 2.55rem;
+  border: 1px solid var(--academic-border);
+  border-radius: .52rem;
+  padding: .55rem .68rem;
+  background: #fff;
+  color: var(--academic-navy);
+  font: inherit;
+  font-size: .76rem;
+  font-weight: 500;
+  letter-spacing: normal;
+}
+.walkin-form-grid textarea { min-height: 4rem; resize: vertical; }
+.walkin-form-grid input:focus,
+.walkin-form-grid select:focus,
+.walkin-form-grid textarea:focus,
+.walkin-book-picker-control > input:focus {
+  outline: 3px solid rgba(164, 0, 0, .13);
+  border-color: #b96a72;
+}
+.walkin-form-grid input[readonly] { background: #f5f7f8; color: var(--academic-navy); }
+.required-field-mark { color: var(--academic-red-dark); }
+.optional-field-mark { margin-left: .25rem; color: #87939b; font-size: .61rem; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.book-information-grid { grid-template-columns: minmax(0, 1.35fr) minmax(7rem, .55fr) repeat(2, minmax(0, 1fr)); }
+.walkin-notes-field { grid-column: 1 / -1; }
+.walkin-book-picker-control { position: relative; min-width: 0; }
+.walkin-book-picker-control > input { padding-right: 2rem; }
+.walkin-book-picker-control > svg { position: absolute; z-index: 1; top: .76rem; right: .65rem; width: 1rem; height: 1rem; color: #7a8991; pointer-events: none; }
+.walkin-book-options {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + .25rem);
+  right: 0;
+  left: 0;
+  max-height: 16rem;
+  overflow-y: auto;
+  border: 1px solid var(--academic-border);
+  border-radius: .6rem;
+  background: #fff;
+  box-shadow: 0 .6rem 1.5rem rgba(16, 47, 70, .16);
+}
+.walkin-book-options > button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: .6rem; border: 0; border-bottom: 1px solid #eef1f2; padding: .58rem .68rem; background: #fff; color: var(--academic-navy); text-align: left; }
+.walkin-book-options > button:last-child { border-bottom: 0; }
+.walkin-book-options > button:hover,
+.walkin-book-options > button.active { background: #f7f3f4; }
+.walkin-book-options > button > span { display: grid; min-width: 0; gap: .14rem; }
+.walkin-book-options strong { overflow: hidden; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
+.walkin-book-options small { color: var(--academic-muted); font-size: .65rem; }
+.walkin-book-options em { flex: 0 0 auto; color: var(--academic-muted); font-size: .62rem; font-style: normal; }
+.walkin-book-no-results { margin: 0; padding: .75rem; color: var(--academic-muted); font-size: .7rem; line-height: 1.5; }
+.walkin-form-footer { display: flex; align-items: center; justify-content: space-between; gap: .8rem; }
+.walkin-form-footer > p { margin: 0; color: var(--academic-muted); font-size: .7rem; }
+.walkin-form-footer > div { display: flex; flex: 0 0 auto; justify-content: flex-end; gap: .5rem; }
+.walkin-form-footer .primary-button,
+.walkin-form-footer .secondary-button { min-height: 2.45rem; padding: .55rem .85rem; font-size: .73rem; }
+.walkin-record-filters { grid-template-columns: minmax(0, 1.8fr) repeat(2, minmax(10rem, .8fr)); }
+.walkin-reservation-table table { min-width: 1050px; }
+.walkin-reservation-table td:nth-child(2),
+.walkin-reservation-table td:nth-child(4),
+.walkin-reservation-table td:nth-child(5),
+.walkin-reservation-table td:nth-child(6) { white-space: nowrap; }
+.reservation-borrower-type { display: inline-flex; border: 1px solid #dce3e7; border-radius: 99rem; padding: .2rem .45rem; background: #f7f9fa; color: #536975; font-size: .64rem; font-weight: 750; white-space: nowrap; }
+.reservation-row-actions { display: flex; min-width: 12rem; flex-wrap: wrap; gap: .3rem; }
+.reservation-row-action { min-height: 1.9rem; border: 1px solid #d9e0e4; border-radius: .42rem; padding: .3rem .48rem; background: #fff; color: var(--academic-navy); font-size: .64rem; font-weight: 750; white-space: nowrap; }
+.reservation-row-action:hover:not(:disabled) { border-color: #c9979d; background: #fff8f8; color: var(--academic-red-dark); }
+.reservation-row-action:disabled { color: #87939b; cursor: not-allowed; opacity: .6; }
+.reservation-row-action.danger { border-color: #ecd6d8; color: var(--academic-red-dark); }
+.reservation-dialog-backdrop { position: fixed; z-index: 1200; inset: 0; display: grid; place-items: center; overflow-y: auto; padding: 1rem; background: rgba(12, 29, 41, .5); }
+.reservation-detail-dialog { width: min(45rem, 100%); max-height: min(90vh, 54rem); overflow-y: auto; border: 1px solid var(--academic-border); border-radius: .9rem; padding: 1.1rem; background: #fff; box-shadow: 0 1.25rem 3rem rgba(10, 27, 39, .24); }
+.reservation-detail-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.reservation-detail-dialog > header h2 { margin: .2rem 0 0; color: var(--academic-navy); font-size: 1.2rem; }
+.reservation-detail-dialog > header > button { width: 2rem; height: 2rem; border: 1px solid var(--academic-border); border-radius: .5rem; background: #fff; color: var(--academic-navy); font-size: 1.25rem; line-height: 1; }
+.reservation-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; }
+.reservation-detail-grid > div { display: grid; min-width: 0; gap: .2rem; border: 1px solid #edf0f2; border-radius: .55rem; padding: .6rem; }
+.reservation-detail-grid > div > span { color: var(--academic-muted); font-size: .63rem; font-weight: 750; text-transform: uppercase; }
+.reservation-detail-grid > div > strong { overflow-wrap: anywhere; color: var(--academic-navy); font-size: .77rem; font-weight: 650; }
+.reservation-detail-grid > .reservation-detail-notes { grid-column: 1 / -1; }
+.reservation-edit-form > footer,
+.reservation-detail-footer { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
+.reservation-edit-form > .form-helper { display: block; margin-top: .75rem; }
+.reservation-edit-form .walkin-form-grid { margin-top: .25rem; }
+
+@media (max-width: 900px) {
+  .book-information-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .walkin-record-filters { grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(8rem, .8fr)); }
+}
+@media (max-width: 640px) {
+  .walkin-form-grid,
+  .book-information-grid,
+  .walkin-record-filters { grid-template-columns: minmax(0, 1fr); }
+  .walkin-notes-field,
+  .reservation-detail-grid > .reservation-detail-notes { grid-column: auto; }
+  .walkin-form-footer { align-items: stretch; flex-direction: column; }
+  .walkin-form-footer > div { justify-content: flex-end; }
+  .reservation-detail-dialog { padding: .85rem; }
+  .reservation-detail-grid { grid-template-columns: minmax(0, 1fr); }
+  .reservation-edit-form .walkin-form-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Administrator activity trail */
+.activity-logs-page { display: grid; gap: 1rem; }
+.activity-page-header {
+  padding: 1.2rem 1.35rem;
+  border: 1px solid var(--academic-border);
+  border-radius: .85rem;
+  background: #fff;
+  box-shadow: 0 .3rem .9rem rgba(16, 47, 70, .035);
+}
+.activity-page-header h2 { margin: .25rem 0 .3rem; color: var(--academic-navy); font-size: clamp(1.45rem, 2.3vw, 1.9rem); letter-spacing: -.04em; }
+.activity-page-header p { margin: 0; color: var(--academic-muted); font-size: .82rem; line-height: 1.5; }
+.activity-summary-grid { margin: 0; }
+.activity-summary-grid .staff-summary-card { min-height: 5.7rem; }
+.activity-summary-grid .staff-summary-card > strong { font-size: 1.45rem; }
+.activity-log-card {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--academic-border);
+  border-radius: .85rem;
+  background: #fff;
+  box-shadow: 0 .3rem .9rem rgba(16, 47, 70, .035);
+}
+.activity-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .7rem;
+  align-items: end;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #e9eef0;
+}
+.activity-filter-field { display: grid; min-width: 0; gap: .3rem; color: #63737d; font-size: .66rem; font-weight: 800; letter-spacing: .045em; text-transform: uppercase; }
+.activity-filter-field span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-filter-field input,
+.activity-filter-field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.55rem;
+  border: 1px solid #d9e0e4;
+  border-radius: .5rem;
+  padding: .55rem .65rem;
+  background: #fff;
+  color: var(--academic-ink);
+  font-size: .77rem;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.activity-filter-field input:focus,
+.activity-filter-field select:focus { border-color: var(--academic-red); outline: 2px solid rgba(164, 0, 0, .12); }
+.activity-search-field { grid-column: span 2; }
+.activity-filter-actions { display: flex; justify-content: flex-end; }
+.activity-filter-actions .secondary-button { min-height: 2.55rem; padding: .55rem .85rem; font-size: .74rem; }
+.activity-filter-actions .secondary-button:disabled { cursor: default; opacity: .55; }
+.activity-table-heading { display: flex; align-items: end; justify-content: space-between; gap: 1rem; padding: .95rem .1rem .75rem; }
+.activity-table-heading h3 { margin: 0; color: var(--academic-navy); font-size: .95rem; }
+.activity-table-heading p { margin: .2rem 0 0; color: var(--academic-muted); font-size: .7rem; }
+.activity-table-heading > span { color: var(--academic-muted); font-size: .72rem; white-space: nowrap; }
+.activity-table-wrap { border: 0; border-radius: .5rem; box-shadow: none; }
+.activity-table-wrap table { width: 100%; min-width: 970px; border-collapse: collapse; }
+.activity-table-wrap th { padding: .65rem .7rem; color: #63737d; font-size: .64rem; }
+.activity-table-wrap td { padding: .65rem .7rem; color: #42535d; font-size: .73rem; vertical-align: middle; }
+.activity-table-wrap td:first-child { min-width: 9rem; white-space: nowrap; }
+.activity-table-wrap td strong { color: var(--academic-navy); font-size: .74rem; }
+.activity-table-wrap .activity-description { display: block; margin-top: .14rem; color: var(--academic-muted); font-size: .67rem; line-height: 1.4; }
+.activity-status { display: inline-flex; align-items: center; border: 1px solid #c8e5d2; border-radius: 999px; padding: .2rem .52rem; background: #edf7f0; color: #23643a; font-size: .65rem; font-weight: 800; white-space: nowrap; }
+.activity-status.failure { border-color: #e8c4c9; background: #fbebed; color: var(--academic-red-dark); }
+.activity-table-wrap .table-action { min-height: 2rem; border-color: #e2c8cb; padding: .35rem .55rem; color: var(--academic-red-dark); font-size: .68rem; }
+.activity-pagination { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .8rem .1rem .05rem; border-top: 1px solid #e9eef0; color: var(--academic-muted); font-size: .71rem; }
+.activity-pagination nav { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .25rem; }
+.activity-pagination button { min-width: 2.1rem; min-height: 2.1rem; border: 1px solid #d9e0e4; border-radius: .42rem; padding: .3rem .55rem; background: #fff; color: var(--academic-navy); font-size: .7rem; font-weight: 700; }
+.activity-pagination button:hover:not(:disabled) { border-color: #c99da2; background: #fff7f7; }
+.activity-pagination button.active { border-color: var(--academic-red); background: var(--academic-red); color: #fff; }
+.activity-pagination button:disabled { cursor: default; opacity: .45; }
+.activity-dialog-backdrop { position: fixed; z-index: 1500; inset: 0; display: grid; place-items: center; overflow-y: auto; padding: 1rem; background: rgba(8, 26, 39, .55); }
+.activity-detail-dialog { width: min(100%, 54rem); max-height: min(92dvh, 54rem); overflow-y: auto; border: 1px solid var(--academic-border); border-radius: .9rem; padding: 1.15rem; background: #fff; box-shadow: 0 1.25rem 3rem rgba(10, 27, 39, .24); }
+.activity-detail-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: .7rem; }
+.activity-detail-dialog > header h2 { margin: .18rem 0 0; color: var(--academic-navy); font-size: 1.2rem; }
+.activity-detail-dialog > header > button { width: 2rem; height: 2rem; border: 1px solid var(--academic-border); border-radius: .5rem; background: #fff; color: var(--academic-navy); font-size: 1.25rem; line-height: 1; }
+.activity-detail-description { margin: 0 0 1rem; color: var(--academic-muted); font-size: .8rem; }
+.activity-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; margin: 0; }
+.activity-detail-grid > div { min-width: 0; padding: .65rem .7rem; border: 1px solid #e8edef; border-radius: .55rem; background: #fbfcfc; }
+.activity-detail-grid dt,
+.activity-value-columns dt { color: var(--academic-muted); font-size: .62rem; font-weight: 800; letter-spacing: .045em; text-transform: uppercase; }
+.activity-detail-grid dd,
+.activity-value-columns dd { margin: .2rem 0 0; color: var(--academic-navy); font-size: .74rem; overflow-wrap: anywhere; }
+.activity-value-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; margin-top: 1rem; }
+.activity-value-columns > div { min-width: 0; padding: .75rem; border: 1px solid #e8edef; border-radius: .55rem; }
+.activity-value-columns h3 { margin: 0 0 .6rem; color: var(--academic-navy); font-size: .75rem; }
+.activity-value-columns dl { display: grid; gap: .55rem; margin: 0; }
+.activity-detail-dialog > footer { display: flex; justify-content: flex-end; margin-top: 1rem; }
+@media (max-width: 1050px) {
+  .activity-filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .activity-search-field { grid-column: span 2; }
+}
+@media (max-width: 700px) {
+  .activity-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .activity-search-field { grid-column: 1 / -1; }
+  .activity-filter-actions { grid-column: 1 / -1; justify-content: stretch; }
+  .activity-filter-actions .secondary-button { width: 100%; }
+  .activity-pagination { align-items: stretch; flex-direction: column; }
+  .activity-pagination nav { justify-content: center; }
+}
+@media (max-width: 480px) {
+  .activity-log-card { padding: .7rem; }
+  .activity-filter-grid { grid-template-columns: 1fr; }
+  .activity-search-field,
+  .activity-filter-actions { grid-column: auto; }
+  .activity-detail-grid,
+  .activity-value-columns { grid-template-columns: 1fr; }
+  .activity-table-heading { align-items: flex-start; flex-direction: column; gap: .35rem; }
 }

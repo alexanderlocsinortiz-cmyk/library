@@ -1,5 +1,9 @@
 [auth]
-enable_signup = false
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = true
 
 [db.seed]
 enabled = true
@@ -9,4 +13,8 @@ sql_paths = ["./seed.sql"]
 # School ID sign-in and recovery happen before the user has a session JWT.
 # The function performs its own input validation and delegates password
 # verification to Supabase Auth.
+verify_jwt = false
+
+[functions.email-auth]
+# Email sign-in is performed before the browser has a user session JWT.
 verify_jwt = false

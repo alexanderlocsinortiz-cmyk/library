@@ -10,6 +10,22 @@ begin
   end;
   raise exception 'Expected rejection: %',command;
 end$$;
+-- The production migration intentionally revokes implicit function execution.
+-- Grant these test-only assertion helpers to the roles used below explicitly.
+grant execute on function public.test_assert(boolean,text), public.test_denied(text,text) to anon,authenticated,service_role;
+select public.test_assert(not has_function_privilege('anon','public.checkout_copy(uuid,uuid,timestamptz)'::regprocedure,'execute'),'anonymous role cannot execute staff checkout RPC');
+select public.test_assert(not has_function_privilege('anon','public.return_loan(uuid)'::regprocedure,'execute'),'anonymous role cannot execute staff return RPC');
+select public.test_assert(not has_function_privilege('anon','public.close_loan_with_status(uuid,public.loan_status)'::regprocedure,'execute'),'anonymous role cannot execute lost or damaged RPC');
+select public.test_assert(not has_function_privilege('anon','public.library_analytics(timestamptz,timestamptz,text)'::regprocedure,'execute'),'anonymous role cannot execute staff analytics RPC');
+select public.test_assert(not has_function_privilege('anon','public.reserve_book(uuid)'::regprocedure,'execute'),'anonymous role cannot execute member reservation RPC');
+select public.test_assert(not has_function_privilege('anon','public.change_member_role(uuid,public.app_role)'::regprocedure,'execute'),'anonymous role cannot execute administrator role RPC');
+select public.test_assert(has_function_privilege('anon','public.reserve_book_by_card(text,text,uuid)'::regprocedure,'execute'),'anonymous role can use the bounded card-and-PIN hold RPC');
+select public.test_assert(has_function_privilege('anon','public.card_reservation_status(text,text)'::regprocedure,'execute') and has_function_privilege('anon','public.cancel_card_reservation(text,text,uuid)'::regprocedure,'execute'),'anonymous cardholders can check and cancel only with card and PIN');
+select public.test_assert(not has_function_privilege('anon','public.verify_library_card_reservation_pin(text,text)'::regprocedure,'execute'),'anonymous role cannot call the internal PIN verifier');
+select public.test_assert(not has_function_privilege('anon','public.set_library_card_reservation_pin(uuid,text)'::regprocedure,'execute'),'anonymous role cannot set cardholder PINs');
+create function public.test_default_anon_function_acl() returns integer language sql as $$select 1$$;
+select public.test_assert(not has_function_privilege('anon','public.test_default_anon_function_acl()'::regprocedure,'execute'),'new public functions do not inherit anonymous or PUBLIC EXECUTE');
+drop function public.test_default_anon_function_acl();
 insert into auth.users(id,raw_user_meta_data)
 select ('00000000-0000-0000-0000-'||lpad(n::text,12,'0'))::uuid,jsonb_build_object('full_name','User '||n) from generate_series(1,7) n;
 insert into public.library_members(id,full_name,library_card_number,member_type,auth_user_id)
@@ -17,15 +33,17 @@ select id,full_name,'CARD-'||right(replace(id::text,'-',''),12),'student',id fro
 insert into public.books(id,title,author) values
  ('20000000-0000-0000-0000-000000000003','Accountless hold title','Author'),
  ('20000000-0000-0000-0000-000000000004','Acquisition request only','Author'),
- ('20000000-0000-0000-0000-000000000005','Linked account queue','Author');
+ ('20000000-0000-0000-0000-000000000005','Linked account queue','Author'),
+ ('20000000-0000-0000-0000-000000000006','Accountless online hold','Author');
 select public.test_assert((select value='3'::jsonb from public.system_settings where key='loan_period_days'),'default loan period is three days');
 update public.profiles set role='administrator' where id in ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002');
 insert into public.books(id,title,author) values ('20000000-0000-0000-0000-000000000001','Test book','Author'),('20000000-0000-0000-0000-000000000002','Queue race','Author');
 update public.books set course_subject='Accounting, Business Management' where id='20000000-0000-0000-0000-000000000001';
 insert into public.book_copies(id,book_id,barcode)
 select ('10000000-0000-0000-0000-'||lpad(n::text,12,'0'))::uuid,'20000000-0000-0000-0000-000000000001','TEST-'||n from generate_series(1,12) n;
-insert into public.book_copies(book_id,barcode,status) values ('20000000-0000-0000-0000-000000000003','WALKIN-HOLD-COPY','maintenance');
-insert into public.book_copies(book_id,barcode,status) values ('20000000-0000-0000-0000-000000000005','LINKED-ACCOUNT-COPY','maintenance');
+insert into public.book_copies(book_id,barcode,status) values ('20000000-0000-0000-0000-000000000003','WALKIN-HOLD-COPY','borrowed');
+insert into public.book_copies(book_id,barcode,status) values ('20000000-0000-0000-0000-000000000005','LINKED-ACCOUNT-COPY','borrowed');
+insert into public.book_copies(id,book_id,barcode,status) values ('10000000-0000-0000-0000-000000000013','20000000-0000-0000-0000-000000000006','CARD-HOLD-COPY','available');
 set role anon;
 select public.test_assert((select count(*)>=3 from public.books),'anonymous catalog title access');
 select public.test_assert((select course_subject='Accounting, Business Management' from public.books where id='20000000-0000-0000-0000-000000000001'),'anonymous catalog can read course and subject tags');
@@ -63,6 +81,80 @@ update public.system_settings set value='3' where key='loan_period_days';
 update public.system_settings set value='2' where key='fine_per_day';
 select public.register_library_member('Walk-in Student','CARD-WALKIN-1',null,'student') as walkin_member \gset
 select public.test_assert((select auth_user_id is null and library_card_number='CARD-WALKIN-1' from public.library_members where id=:'walkin_member'),'staff can register a borrower with no login');
+select public.set_library_card_reservation_pin(:'walkin_member','12345678');
+reset role;
+select public.test_assert((select pin_hash like '$2%' and crypt('12345678',pin_hash)=pin_hash from public.library_member_reservation_pins where member_id=:'walkin_member'),'reservation PIN is stored only as a bcrypt hash');
+set role authenticated;
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
+select public.register_library_member('Self Signup Student','CARD-SELF-SIGNUP','STU-SELF-SIGNUP','student') as self_signup_member \gset
+select public.set_library_card_reservation_pin(:'self_signup_member','24681357');
+reset role;
+insert into auth.users(id,email,raw_user_meta_data) values(
+  '00000000-0000-0000-0000-000000000008','self.signup@example.edu',
+  '{"full_name":"Self Signup Student","registration_school_id":"STU-SELF-SIGNUP"}'
+);
+select public.test_assert((select school_id is null and role='member' from public.profiles where id='00000000-0000-0000-0000-000000000008'),'signup School ID is only an unverified claim until card verification');
+set role authenticated;
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000008';
+select public.test_assert(not public.current_user_has_active_library_member(),'unlinked account cannot access member pages before identity verification');
+select public.test_denied($q$select public.complete_member_account_registration('STU-SELF-SIGNUP','CARD-SELF-SIGNUP','24681357')$q$,'Confirm your email');
+reset role;
+update auth.users set email_confirmed_at=now() where id='00000000-0000-0000-0000-000000000008';
+set role service_role;
+select public.test_assert(public.school_login_email('STU-SELF-SIGNUP') is null,'an unlinked School ID cannot resolve to a login email');
+reset role;
+set role authenticated;
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000008';
+select public.test_assert((public.complete_member_account_registration('STU-OTHER','CARD-SELF-SIGNUP','24681357')->>'verified')::boolean is false,'a verified card cannot be linked to a different School ID');
+select public.test_assert((public.complete_member_account_registration('STU-SELF-SIGNUP','CARD-SELF-SIGNUP','00000000')->>'verified')::boolean is false,'an incorrect library PIN cannot link an account');
+select public.test_assert((public.complete_member_account_registration('STU-SELF-SIGNUP','CARD-SELF-SIGNUP','24681357')->>'verified')::boolean,'email-confirmed account can link only with matching staff-verified School ID and card PIN');
+select public.test_assert((select p.school_id='STU-SELF-SIGNUP' and m.auth_user_id=p.id from public.profiles p join public.library_members m on m.school_id=p.school_id where p.id='00000000-0000-0000-0000-000000000008'),'registration links the profile to the correct library member');
+select public.test_assert(public.current_user_has_active_library_member(),'linked active account passes the member access gate');
+reset role;
+set role service_role;
+select public.test_assert(public.school_login_email(' stu-self-signup ')='self.signup@example.edu','School ID login resolves only to the verified member email');
+reset role;
+set role authenticated;
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000008';
+select public.test_denied($q$select public.school_login_email('STU-SELF-SIGNUP')$q$,'permission denied');
+reset role;
+set role authenticated;
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
+select public.checkout_copy('10000000-0000-0000-0000-000000000013','00000000-0000-0000-0000-000000000003') as card_hold_loan \gset
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000003';
+select public.test_denied($q$select public.set_library_card_reservation_pin('00000000-0000-0000-0000-000000000003','87654321')$q$,'Staff access');
+select public.test_denied($q$select public.set_library_card_reservation_pin('00000000-0000-0000-0000-000000000003','123')$q$,'Staff access');
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
+reset role;
+set request.jwt.claim.sub = '';
+set role anon;
+select public.test_denied($q$select * from public.library_member_reservation_pins$q$,'permission denied');
+select public.test_assert((public.reserve_book_by_card('CARD-WALKIN-1','87654321','20000000-0000-0000-0000-000000000006')->>'verified')::boolean is false,'incorrect PIN is rejected without rolling back the rate limit');
+select public.test_assert((public.reserve_book_by_card('CARD-WALKIN-1','12345678','20000000-0000-0000-0000-000000000006')->'verified')::boolean and (public.reserve_book_by_card('CARD-WALKIN-1','12345678','20000000-0000-0000-0000-000000000006')->'queue_position')::text='1','cardholder can enter the first online hold queue position');
+select public.test_assert((public.card_reservation_status('CARD-WALKIN-1','12345678')->>'verified')::boolean and jsonb_array_length(public.card_reservation_status('CARD-WALKIN-1','12345678')->'reservations')=1,'cardholder can securely look up their active holds');
+reset role;
+set role authenticated;
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
+select public.return_loan(:'card_hold_loan');
+select public.test_assert((select r.status='ready_for_pickup' and c.status='reserved' from public.reservations r join public.book_copies c on c.id=r.copy_id where r.member_id=:'walkin_member' and r.book_id='20000000-0000-0000-0000-000000000006'),'return assigns a physical copy to the accountless online hold');
+select public.test_assert((select count(*)=0 from public.notifications where member_id=:'walkin_member'),'accountless pickup notification does not violate profile-keyed notifications');
+reset role;
+set role anon;
+select public.test_assert((public.card_reservation_status('CARD-WALKIN-1','12345678')->'reservations'->0->>'status')='ready_for_pickup' and (public.card_reservation_status('CARD-WALKIN-1','12345678')->'reservations'->0->>'pickup_expires_at')::timestamptz>now(),'cardholder can see pickup status and deadline');
+select public.test_assert((public.cancel_card_reservation('CARD-WALKIN-1','12345678',(select (hold->>'reservation_id')::uuid from jsonb_array_elements(public.card_reservation_status('CARD-WALKIN-1','12345678')->'reservations') hold))->>'verified')::boolean,'cardholder can cancel a hold');
+select public.test_assert(jsonb_array_length(public.card_reservation_status('CARD-WALKIN-1','12345678')->'reservations')=0,'cardholder can cancel their hold');
+select public.test_assert((public.card_reservation_status('CARD-WALKIN-1','00000000')->>'verified')::boolean is false,'first bad PIN is counted');
+select public.test_assert((public.card_reservation_status('CARD-WALKIN-1','00000000')->>'verified')::boolean is false,'second bad PIN is counted');
+select public.test_assert((public.card_reservation_status('CARD-WALKIN-1','00000000')->>'verified')::boolean is false,'third bad PIN is counted');
+select public.test_assert((public.card_reservation_status('CARD-WALKIN-1','00000000')->>'verified')::boolean is false,'fourth bad PIN is counted');
+select public.test_assert((public.card_reservation_status('CARD-WALKIN-1','00000000')->>'verified')::boolean is false,'fifth bad PIN is counted');
+select public.test_assert((public.card_reservation_status('CARD-WALKIN-1','12345678')->>'verified')::boolean is false,'correct PIN is blocked during the temporary lockout');
+reset role;
+select public.test_assert((select status='available' from public.book_copies where id='10000000-0000-0000-0000-000000000013'),'cancelling a pickup hold releases its assigned copy');
+update public.library_member_reservation_pins set failed_attempts=0,locked_until=null where member_id=:'walkin_member';
+set role authenticated;
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
+select public.test_denied(format('select public.set_library_card_reservation_pin(%L,%L)',:'walkin_member','123'),'Use a PIN');
 select public.test_denied(format('select public.staff_reserve_book(%L,%L)','20000000-0000-0000-0000-000000000004',:'walkin_member'),'no physical copies');
 select public.test_denied(format('select public.checkout_copy(%L,%L,%L)','10000000-0000-0000-0000-000000000009',:'walkin_member',now()+interval '4 days'),'exceeds the configured loan period');
 select public.checkout_copy('10000000-0000-0000-0000-000000000009',:'walkin_member') as walkin_loan \gset
@@ -93,7 +185,7 @@ select public.test_assert((select count(*)=3 from public.audit_logs where action
 select public.test_denied(format('select public.return_loan(%L)',:'returned_loan'),'already closed');
 -- Queue fixture with two copies. All reservations use the member RPC.
 reset role;
-insert into public.book_copies(book_id,barcode,status) values('20000000-0000-0000-0000-000000000002','QUEUE-A','maintenance'),('20000000-0000-0000-0000-000000000002','QUEUE-B','maintenance');
+insert into public.book_copies(book_id,barcode,status) values('20000000-0000-0000-0000-000000000002','QUEUE-A','borrowed'),('20000000-0000-0000-0000-000000000002','QUEUE-B','borrowed');
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000003';
 select public.reserve_book('20000000-0000-0000-0000-000000000002') as hold1 \gset
@@ -119,6 +211,10 @@ select public.cancel_reservation(:'hold1');
 reset role;
 select public.test_assert((select status='ready_for_pickup' from public.reservations where id=:'hold3'),'Cancellation reassigns copy');
 update public.reservations set pickup_expires_at=now()-interval '1 second' where id=:'hold3';
+set role authenticated;
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
+reset role;
+update public.loans set due_at=now()-interval '1 second' where id=:'pickup_loan';
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
 select public.refresh_circulation_statuses();
@@ -173,7 +269,7 @@ reset role;
 -- Report results are computed in the database; terminal loss/damage is not a return.
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
-select public.test_assert((select sum((day->>'returns')::integer)=3 from jsonb_array_elements(public.library_analytics(now()-interval '1 day',now()+interval '1 day')->'daily') day),'Analytics counts physical returns and excludes lost or damaged closures');
+select public.test_assert((select sum((day->>'returns')::integer)=4 from jsonb_array_elements(public.library_analytics(now()-interval '1 day',now()+interval '1 day')->'daily') day),'Analytics counts physical returns and excludes lost or damaged closures');
 select public.test_assert((public.transaction_history('damaged',0,1)->>'total')::integer=1,'Searchable closure audit');
 select public.test_assert(jsonb_array_length(public.transaction_history('',0,2)->'items')=2,'History is paginated');
 select public.test_denied('select public.scheduled_circulation()','permission denied');
@@ -189,7 +285,7 @@ set local request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
 select public.test_assert((select (category->>'count')::integer=1005 from jsonb_array_elements(public.library_analytics(now()-interval '1 day',now()+interval '1 day')->'categories') category where category->>'label'='Bulk category'),'Analytics includes over 1000 records');
 rollback;
 -- Leave waiting rows and available copies for concurrent promotion tests.
-update public.book_copies set status='maintenance' where barcode like 'QUEUE-%';
+update public.book_copies set status='borrowed' where barcode like 'QUEUE-%';
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000003';
 select public.reserve_book('20000000-0000-0000-0000-000000000002');
@@ -243,4 +339,111 @@ select public.test_assert((select status='completed' and summary->>'wrong_locati
 select public.test_assert((select status='available' from public.book_copies where barcode='TEST-5'),'inventory audit does not automatically change a missing copy status');
 select public.test_assert((select status='damaged' from public.book_copies where barcode='TEST-2'),'inventory audit does not change a damaged copy status');
 select public.test_denied(format('select public.complete_inventory_audit(%L)',:'stock_audit'),'not open');
+reset role;
+
+-- Walk-in reservations keep borrower details without requiring a member row or
+-- Auth account, but only staff may create or edit them.
+insert into public.books(id, title, author) values
+  ('20000000-0000-0000-0000-000000000007', 'Walk-in reservation', 'Queue Author'),
+  ('20000000-0000-0000-0000-000000000008', 'Mixed borrower queue', 'Queue Author'),
+  ('20000000-0000-0000-0000-000000000009', 'Available walk-in reservation', 'Queue Author');
+insert into public.book_copies(book_id, barcode, status) values
+  ('20000000-0000-0000-0000-000000000007', 'WALKIN-STAFF-COPY', 'borrowed'),
+  ('20000000-0000-0000-0000-000000000008', 'MIXED-QUEUE-COPY', 'borrowed'),
+  ('20000000-0000-0000-0000-000000000009', 'AVAILABLE-WALKIN-COPY', 'available');
+set role anon;
+select public.test_denied($q$select public.staff_create_reservation('20000000-0000-0000-0000-000000000007',null,'visitor','Community Visitor',null,null,null,current_date,null,null)$q$,'permission denied');
+reset role;
+set role authenticated;
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000003';
+select public.test_denied($q$select public.staff_create_reservation('20000000-0000-0000-0000-000000000007',null,'visitor','Community Visitor',null,null,null,current_date,null,null)$q$,'Staff access');
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
+select public.staff_create_reservation(
+  '20000000-0000-0000-0000-000000000007', null, 'visitor', 'Community Visitor', 'VIS-001',
+  '+63 912 345 6789', 'visitor@example.edu', current_date, current_date + 2, 'Front desk walk-in'
+) as manual_walkin_reservation \gset
+select public.test_assert((select member_id is null and borrower_type='visitor' and borrower_full_name='Community Visitor'
+  and student_employee_id='VIS-001' and expected_pickup_date=current_date+2
+  and created_by='00000000-0000-0000-0000-000000000001'
+  from public.reservations where id=:'manual_walkin_reservation'), 'staff can create a fully detailed walk-in reservation without a library member or Auth account');
+select public.test_denied($q$select public.staff_create_reservation('20000000-0000-0000-0000-000000000007',null,'visitor','Community Visitor','VIS-001','+63 912 345 6789','visitor@example.edu',current_date,current_date+2,'Front desk walk-in')$q$,'already has an active reservation');
+select public.test_denied($q$select public.staff_create_reservation('20000000-0000-0000-0000-000000000007',null,'visitor','Other Visitor','VIS-002',null,'not-an-email',current_date,null,null)$q$,'valid email');
+select public.test_denied($q$select public.staff_create_reservation('20000000-0000-0000-0000-000000000007',null,'visitor','Phone Visitor','VIS-PHONE','not a phone',null,current_date,null,null)$q$,'valid contact number');
+select public.test_denied($q$select public.staff_create_reservation('20000000-0000-0000-0000-000000000007',null,'visitor','Other Visitor','VIS-002',null,null,current_date,current_date-1,null)$q$,'cannot be before');
+select public.test_denied(format('update public.reservations set notes=''forbidden'' where id=%L', :'manual_walkin_reservation'),'permission denied');
+
+-- A staff reservation for an available copy is immediately routed through the
+-- shared FIFO allocator. A second borrower waits, then receives that same copy
+-- only after the first reservation is cancelled.
+select public.staff_create_reservation(
+  '20000000-0000-0000-0000-000000000009', null, 'visitor', 'Available Visitor One', null,
+  null, null, current_date, null, null
+) as available_walkin_reservation \gset
+select public.test_assert((select r.status='ready_for_pickup' and r.copy_id is not null and c.status='reserved'
+  from public.reservations r join public.book_copies c on c.id=r.copy_id where r.id=:'available_walkin_reservation'),
+  'a walk-in reservation for an available title receives a real copy through the allocator');
+select copy_id as available_walkin_copy from public.reservations where id=:'available_walkin_reservation' \gset
+select public.staff_create_reservation(
+  '20000000-0000-0000-0000-000000000009', null, 'visitor', 'Available Visitor Two', null,
+  null, null, current_date, null, null
+) as second_available_walkin_reservation \gset
+select public.test_assert((select status='waiting' and copy_id is null from public.reservations where id=:'second_available_walkin_reservation')
+  and (select count(*)=1 from public.reservations where book_id='20000000-0000-0000-0000-000000000009' and status='ready_for_pickup'),
+  'an assigned physical copy is never assigned to a second active reservation');
+select public.cancel_reservation(:'available_walkin_reservation');
+select public.test_assert((select status='ready_for_pickup' and copy_id=:'available_walkin_copy'
+  from public.reservations where id=:'second_available_walkin_reservation'),
+  'cancelling the first reservation assigns the released copy to the next borrower in FIFO order');
+select public.cancel_reservation(:'second_available_walkin_reservation');
+
+-- Registered and walk-in borrowers share the same FIFO allocator. One physical
+-- copy cannot be assigned to both, and checkout cannot bypass walk-in identity.
+select public.staff_reserve_book('20000000-0000-0000-0000-000000000008',:'walkin_member') as registered_queue_reservation \gset
+select public.staff_create_reservation(
+  '20000000-0000-0000-0000-000000000008', null, 'student', 'Verified Student', 'STU-123',
+  null, null, current_date, null, null
+) as queued_walkin_reservation \gset
+reset role;
+update public.book_copies set status='available' where barcode='MIXED-QUEUE-COPY';
+set role authenticated;
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
+select public.promote_next_reservation('20000000-0000-0000-0000-000000000008');
+select public.test_assert((select status='ready_for_pickup' from public.reservations where id=:'registered_queue_reservation')
+  and (select status='waiting' from public.reservations where id=:'queued_walkin_reservation'), 'registered member remains ahead of the later walk-in request');
+select public.test_assert((select count(*)=1 and count(distinct copy_id)=1 from public.reservations
+  where book_id='20000000-0000-0000-0000-000000000008' and status='ready_for_pickup'), 'the shared allocator assigns the only copy once');
+select public.cancel_reservation(:'registered_queue_reservation');
+select public.test_assert((select status='ready_for_pickup' and copy_id is not null from public.reservations where id=:'queued_walkin_reservation'), 'cancellation releases the copy to the next walk-in in FIFO order');
+select public.test_denied(format('select public.checkout_copy(%L,%L)',
+  (select copy_id from public.reservations where id=:'queued_walkin_reservation'), :'linked_member'), 'held for the next reservation');
+select public.test_denied(format('select public.staff_update_reservation(%L,%L,%L,%L,%L,NULL,NULL,NULL,current_date,NULL,NULL)',
+  :'queued_walkin_reservation', '20000000-0000-0000-0000-000000000008', '00000000-0000-0000-0000-000000000003', 'student', 'User 3'), 'do not match');
+select public.staff_update_reservation(
+  :'queued_walkin_reservation', '20000000-0000-0000-0000-000000000008', :'linked_member',
+  'student', 'Verified Student', 'STU-123', null, null, current_date, null, null
+);
+select public.checkout_copy((select copy_id from public.reservations where id=:'queued_walkin_reservation'), :'linked_member') as walkin_checkout \gset
+select public.test_assert((select status='completed' and member_id=:'linked_member' from public.reservations where id=:'queued_walkin_reservation')
+  and exists(select 1 from public.loans where id=:'walkin_checkout' and member_id=:'linked_member'), 'checkout associates the borrower and is the only way to complete a ready reservation');
+
+-- Expiry of a walk-in hold releases its copy without attempting a profile-only
+-- notification, while leaving the reservation in the existing expired state.
+select public.cancel_reservation(:'manual_walkin_reservation');
+select public.staff_create_reservation(
+  '20000000-0000-0000-0000-000000000007', null, 'visitor', 'Expiry Visitor', 'EXP-001',
+  null, null, current_date, null, null
+) as expiring_walkin_reservation \gset
+reset role;
+update public.book_copies set status='available' where barcode='WALKIN-STAFF-COPY';
+set role authenticated;
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
+select public.promote_next_reservation('20000000-0000-0000-0000-000000000007');
+reset role;
+update public.reservations set pickup_expires_at=now()-interval '1 second' where id=:'expiring_walkin_reservation';
+set role authenticated;
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
+select public.refresh_circulation_statuses();
+select public.test_assert((select status='expired' from public.reservations where id=:'expiring_walkin_reservation')
+  and (select status='available' from public.book_copies where barcode='WALKIN-STAFF-COPY'), 'walk-in expiry releases inventory and remains in the reservation history');
+select public.test_assert(not has_function_privilege('anon','public.staff_update_reservation(uuid,uuid,uuid,text,text,text,text,text,date,date,text)'::regprocedure,'execute'), 'anonymous role cannot edit walk-in reservations');
 reset role;

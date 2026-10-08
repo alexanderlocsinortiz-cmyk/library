@@ -6,7 +6,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { defaultCirculationPolicy, formatFine, getLoanDueState, normalizeCirculationPolicy } from '../lib/circulation'
 
 const formatDate = (value) => value ? new Date(value).toLocaleDateString() : 'Not set'
-const isDemoSampleBook = (book) => book?.description?.startsWith('SAMPLE RECORD -')
+const CATALOG_PAGE_SIZE = 12
 
 function describeReservationError(message) {
   const normalized = (message || '').toLowerCase()
@@ -34,10 +34,124 @@ function BookCover({ book }) {
   return <div className="book-cover compact-cover">{book?.cover_url ? <img src={book.cover_url} alt={`Cover of ${book.title}`} /> : <span>BOOK</span>}</div>
 }
 
+function CatalogBookCover({ book }) {
+  const [imageFailed, setImageFailed] = useState(false)
+  return <span className="catalog-book-cover">
+    {book?.cover_url && !imageFailed
+      ? <img src={book.cover_url} alt={`Cover of ${book.title}`} loading="lazy" decoding="async" onError={() => setImageFailed(true)} />
+      : <span className="catalog-cover-placeholder"><small>IBA COLLEGE LIBRARY</small><strong>{book?.title || 'Untitled book'}</strong></span>}
+  </span>
+}
+
 function StatusBadge({ value }) {
   const label = value?.replaceAll('_', ' ') || 'Unknown'
   const danger = ['overdue', 'lost', 'damaged'].includes(value)
   return <span className={danger ? 'table-status danger' : 'table-status'} data-status={value}>{label}</span>
+}
+
+function describeCardReservationError(message) {
+  const normalized = (message || '').toLowerCase()
+  if (normalized.includes('card or pin')) return 'The card number or PIN could not be verified. Check both or ask library staff to reset the PIN.'
+  if (normalized.includes('available now')) return 'A copy is available now. Please borrow it at the circulation desk.'
+  if (normalized.includes('no physical copy')) return 'The library has no physical copy of this title yet. Ask staff about a book request.'
+  if (normalized.includes('currently circulating')) return 'This title has no copies currently out or assigned to a hold, so it cannot be queued yet.'
+  return 'The reservation could not be completed. Please try again or ask library staff for help.'
+}
+
+function PublicReservationManager() {
+  const [cardNumber, setCardNumber] = useState('')
+  const [pin, setPin] = useState('')
+  const [reservations, setReservations] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [cancellingId, setCancellingId] = useState('')
+  const [confirmingReservation, setConfirmingReservation] = useState(null)
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+
+  const lookupReservations = async (event) => {
+    event?.preventDefault()
+    if (!supabase || !cardNumber.trim() || !pin) return
+    setLoading(true)
+    setError('')
+    setMessage('')
+    try {
+      const { data, error: lookupError } = await supabase.rpc('card_reservation_status', {
+        p_card_number: cardNumber.trim(),
+        p_pin: pin,
+      })
+      if (lookupError) throw lookupError
+      if (data?.verified === false) {
+        setReservations(null)
+        setError(describeCardReservationError('card or pin'))
+        return
+      }
+      setReservations(data?.reservations ?? [])
+    } catch (lookupError) {
+      if (import.meta.env.DEV) console.error('[public reservations] lookup failed', lookupError)
+      setReservations(null)
+      setError(describeCardReservationError(lookupError?.message))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const cancelReservation = async (reservation) => {
+    if (!supabase || !pin) return
+    setCancellingId(reservation.reservation_id)
+    setError('')
+    setMessage('')
+    try {
+      const { data, error: cancelError } = await supabase.rpc('cancel_card_reservation', {
+        p_card_number: cardNumber.trim(),
+        p_pin: pin,
+        p_reservation_id: reservation.reservation_id,
+      })
+      if (cancelError) throw cancelError
+      if (data?.verified === false) throw new Error('Card or PIN was not verified')
+      await lookupReservations()
+      setMessage('Reservation cancelled. Any assigned copy has been released to the next person in line.')
+    } catch (cancelError) {
+      if (import.meta.env.DEV) console.error('[public reservations] cancellation failed', cancelError)
+      setError(describeCardReservationError(cancelError?.message))
+    } finally {
+      setCancellingId('')
+      setConfirmingReservation(null)
+    }
+  }
+
+  return <details className="secondary-tool-disclosure public-reservation-manager">
+    <summary><span>Check or cancel a reservation</span><small>Use your library card and the private PIN issued by library staff.</small></summary>
+    <div className="public-reservation-content">
+      <form className="tool-form" onSubmit={lookupReservations}>
+        <h3>My reservations</h3>
+        <div className="form-row two-column">
+          <label>Library card number<input value={cardNumber} onChange={(event) => setCardNumber(event.target.value)} autoComplete="username" maxLength="100" required /></label>
+          <label>Reservation PIN<input type="password" inputMode="numeric" autoComplete="current-password" value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 12))} minLength="6" maxLength="12" pattern="[0-9]{6,12}" required /></label>
+        </div>
+        <button type="submit" className="secondary-button" disabled={loading || !cardNumber.trim() || pin.length < 6}>{loading ? 'Checking...' : 'Check reservations'}</button>
+      </form>
+      {error && <div className="inline-error" role="alert">{error}</div>}
+      {message && <div className="inline-success" role="status">{message}</div>}
+      {reservations && reservations.length === 0 && <div className="empty-state">No active reservations were found for this card.</div>}
+      {reservations?.length > 0 && <div className="reservation-lookup-list">{reservations.map((reservation) => <article className="reservation-lookup-card" key={reservation.reservation_id}>
+        <div><strong>{reservation.book_title}</strong><small>{reservation.author || 'Author not recorded'}</small></div>
+        <StatusBadge value={reservation.status} />
+        <p>{reservation.status === 'waiting' ? `Queue position ${reservation.queue_position ?? 'pending'}` : `Collect by ${new Date(reservation.pickup_expires_at).toLocaleString()}`}</p>
+        {['waiting', 'ready_for_pickup'].includes(reservation.status) && <button type="button" className="table-action" onClick={() => setConfirmingReservation(reservation)} disabled={cancellingId === reservation.reservation_id}>{cancellingId === reservation.reservation_id ? 'Cancelling...' : 'Cancel hold'}</button>}
+      </article>)}</div>}
+      <p className="form-helper">Check here for pickup status and deadlines. Ask library staff to set or reset your PIN after they verify your card. The library does not send reservation email.</p>
+      <ConfirmDialog
+        open={Boolean(confirmingReservation)}
+        title="Cancel this hold?"
+        description={`Cancel your reservation for “${confirmingReservation?.book_title || 'this book'}”? Your place in the queue will be released.`}
+        confirmLabel="Cancel hold"
+        danger
+        busy={Boolean(confirmingReservation && cancellingId === confirmingReservation.reservation_id)}
+        onCancel={() => setConfirmingReservation(null)}
+        onConfirm={() => { if (confirmingReservation) void cancelReservation(confirmingReservation) }}
+      />
+    </div>
+  </details>
 }
 
 export function CatalogPage({ onBack, role }) {
@@ -47,6 +161,7 @@ export function CatalogPage({ onBack, role }) {
   const [category, setCategory] = useState('all')
   const [author, setAuthor] = useState('all')
   const [sortBy, setSortBy] = useState('title-asc')
+  const [page, setPage] = useState(1)
   const [selectedBookId, setSelectedBookId] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -86,6 +201,7 @@ export function CatalogPage({ onBack, role }) {
   const categories = [...new Set(books.map((book) => book.category).filter(Boolean))].sort()
   const authors = [...new Set(books.map((book) => book.author).filter(Boolean))].sort()
   const hasActiveCatalogFilters = Boolean(search.trim()) || availability !== 'all' || category !== 'all' || author !== 'all' || sortBy !== 'title-asc'
+  useEffect(() => { setPage(1) }, [search, availability, category, author, sortBy])
   const clearCatalogFilters = () => {
     setSearch('')
     setAvailability('all')
@@ -101,10 +217,19 @@ export function CatalogPage({ onBack, role }) {
       && (category === 'all' || book.category === category)
       && (author === 'all' || book.author === author)
   }).sort((left, right) => {
-    if (sortBy === 'title-desc') return right.title.localeCompare(left.title)
+    if (sortBy === 'title-desc') return (right.title || '').localeCompare(left.title || '')
     if (sortBy === 'newest') return (right.publication_year || 0) - (left.publication_year || 0)
-    return left.title.localeCompare(right.title)
+    return (left.title || '').localeCompare(right.title || '')
   })
+
+  const pageCount = Math.max(1, Math.ceil(filteredBooks.length / CATALOG_PAGE_SIZE))
+  const activePage = Math.min(page, pageCount)
+  const pageStartIndex = (activePage - 1) * CATALOG_PAGE_SIZE
+  const pageItems = filteredBooks.slice(pageStartIndex, pageStartIndex + CATALOG_PAGE_SIZE)
+  const firstBookNumber = filteredBooks.length === 0 ? 0 : pageStartIndex + 1
+  const lastBookNumber = Math.min(pageStartIndex + CATALOG_PAGE_SIZE, filteredBooks.length)
+  const firstVisiblePage = Math.max(1, Math.min(activePage - 2, pageCount - 4))
+  const visiblePages = Array.from({ length: Math.min(pageCount, 5) }, (_, index) => firstVisiblePage + index)
 
   const reserve = async (bookId) => {
     if (!supabase) return
@@ -123,38 +248,72 @@ export function CatalogPage({ onBack, role }) {
     }
   }
 
-  const { pageItems, pagination } = usePagination(filteredBooks, [search, availability, category, author, sortBy].join('|'))
-
-
   if (selectedBookId) return <BookDetailsView bookId={selectedBookId} role={role} onBack={() => setSelectedBookId('')} />
 
   return (
-    <section className="content-section">
-      <PageHeader eyebrow="Library catalog" title="Search library" description="Find books by title, author, course or subject, and live availability." />
-      <div className="catalog-toolbar catalog-filters">
-        <label className="toolbar-field"><span>Search catalog</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Title, author, ISBN, course, or subject" aria-label="Search library" /></label>
+    <section className="content-section catalog-page">
+      <header className="book-page-header-card catalog-page-header">
+        <div className="book-page-header-copy">
+          <span className="eyebrow">Library catalog</span>
+          <h2>Browse Books</h2>
+          <p>Discover books available in the college library.</p>
+        </div>
+        {onBack && <button type="button" className="book-page-header-back" onClick={onBack}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /><path d="M20 12H9" /></svg>
+          <span>{role === 'public' ? 'Back to sign in' : 'Back to dashboard'}</span>
+        </button>}
+      </header>
+      <div className="catalog-toolbar-panel">
+        <div className="catalog-toolbar catalog-filters">
+        <label className="toolbar-field catalog-search-field"><span>Search catalog</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Title, author, ISBN, course, or subject" aria-label="Search library" /></label>
         <label className="toolbar-field"><span>Availability</span><select value={availability} onChange={(event) => setAvailability(event.target.value)} aria-label="Filter availability"><option value="all">All availability</option><option value="available">Available</option><option value="unavailable">Unavailable</option></select></label>
         <label className="toolbar-field"><span>Category</span><select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="Filter category"><option value="all">All categories</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
         <label className="toolbar-field"><span>Author</span><select value={author} onChange={(event) => setAuthor(event.target.value)} aria-label="Filter author"><option value="all">All authors</option>{authors.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
         <label className="toolbar-field"><span>Sort by</span><select value={sortBy} onChange={(event) => setSortBy(event.target.value)} aria-label="Sort catalog"><option value="title-asc">Title A-Z</option><option value="title-desc">Title Z-A</option><option value="newest">Newest publication</option></select></label>
+        </div>
+        <div className="catalog-toolbar-footer">
+          <p className="catalog-result-count" aria-live="polite">{loading ? 'Loading catalog...' : `${filteredBooks.length} matching ${filteredBooks.length === 1 ? 'book' : 'books'}`}</p>
+          {hasActiveCatalogFilters && <button type="button" className="catalog-clear-filters" onClick={clearCatalogFilters}>Clear Filters</button>}
+        </div>
       </div>
-      <p className="catalog-result-count" aria-live="polite">{loading ? 'Loading catalog...' : `${filteredBooks.length} ${filteredBooks.length === 1 ? 'title' : 'titles'} shown`}</p>
       {message && <div className="inline-success" role="status">{message}</div>}
       {error && <div className="inline-error" role="alert">Unable to load the catalog. Please try again.</div>}
       {actionError && <div className="inline-error" role="alert">{actionError}</div>}
-      {loading && <div className="empty-state loading-state">Loading catalog...</div>}
+      {loading && <div className="catalog-grid catalog-skeleton-grid" role="status" aria-label="Loading catalog books" aria-busy="true">
+        <span className="sr-only">Loading catalog...</span>
+        {Array.from({ length: CATALOG_PAGE_SIZE }, (_, index) => <div className="catalog-skeleton-card" key={index} aria-hidden="true"><div className="catalog-skeleton-cover" /><div className="catalog-skeleton-line title-line" /><div className="catalog-skeleton-line author-line" /><div className="catalog-skeleton-pill" /></div>)}
+      </div>}
       {!loading && !error && filteredBooks.length === 0 && <div className="empty-state large catalog-empty-state">
-        <div><strong>{books.length === 0 ? 'The catalog is empty right now' : 'No books match your search'}</strong><p>{books.length === 0 ? 'Library staff have not added any titles yet. Please ask at the circulation desk.' : 'Try a different search or clear your filters to see more of the collection.'}</p>{books.length > 0 && hasActiveCatalogFilters && <button type="button" className="secondary-button" onClick={clearCatalogFilters}>Clear search and filters</button>}</div>
+        <div><strong>{books.length === 0 ? 'The catalog is empty right now' : 'No books match your search'}</strong><p>{books.length === 0 ? 'Library staff have not added any titles yet. Please ask at the circulation desk.' : 'Try a different search or clear your filters to see more of the collection.'}</p>{books.length > 0 && hasActiveCatalogFilters && <button type="button" className="secondary-button" onClick={clearCatalogFilters}>Clear Filters</button>}</div>
       </div>}
       {!loading && !error && filteredBooks.length > 0 && <div className="catalog-grid">{pageItems.map((book) => {
         const copies = book.book_copies || []
         const availableCopies = copies.filter((copy) => copy.status === 'available').length
-        const status = availableCopies > 0 ? 'Available' : copies.some((copy) => copy.status === 'reserved') ? 'Reserved' : copies.length > 0 ? 'Borrowed' : 'Unavailable'
-        const sampleBook = isDemoSampleBook(book)
-        return <article className="book-card" key={book.id}><div className="book-cover">{book.cover_url ? <img src={book.cover_url} alt={`Cover of ${book.title}`} /> : <span>BOOK</span>}</div><div className="book-info"><span className={availableCopies > 0 ? 'availability available' : 'availability unavailable'}>{status}{availableCopies > 0 ? ` / ${availableCopies} available` : ''}</span><h3>{book.title}</h3><p className="book-author">{book.author}</p><small>{book.course_subject || book.category || 'Uncategorized'}{book.isbn ? ` / ISBN ${book.isbn}` : ''}</small>{sampleBook && <span className="catalog-sample-label">Demo sample · holding not verified</span>}<div className="book-card-actions"><button className="card-action" onClick={() => setSelectedBookId(book.id)}>View details</button>{role === 'member' && availableCopies === 0 && !sampleBook && <button className="card-action" onClick={() => reserve(book.id)} disabled={reservingId === book.id}>{reservingId === book.id ? 'Saving...' : 'Reserve'}</button>}</div></div></article>
+        const hasCirculatingCopies = copies.some((copy) => ['borrowed', 'overdue', 'reserved'].includes(copy.status))
+        const subject = book.course_subject || book.category
+        return <article className="book-card" key={book.id}>
+          <button type="button" className="catalog-card-main" onClick={() => setSelectedBookId(book.id)} aria-label={`View details for ${book.title}`}>
+            <CatalogBookCover book={book} />
+            <span className="book-info">
+              <span className="catalog-card-title" role="heading" aria-level="3">{book.title}</span>
+              <span className="book-author">{book.author || 'Author not recorded'}</span>
+              <span className={availableCopies > 0 ? 'availability available' : 'availability unavailable'}>{availableCopies > 0 ? `Available · ${availableCopies} / ${copies.length}` : `Unavailable · 0 / ${copies.length}`}</span>
+              {subject && <span className="catalog-card-subject" title={subject}>{subject}</span>}
+            </span>
+          </button>
+          {role === 'member' && availableCopies === 0 && hasCirculatingCopies && <button type="button" className="catalog-card-reserve" onClick={() => reserve(book.id)} disabled={reservingId === book.id}>{reservingId === book.id ? 'Saving...' : 'Reserve'}</button>}
+        </article>
       })}</div>}
-      <button className="back-button catalog-back" onClick={onBack}>{role === 'public' ? 'Back to sign in' : '← Dashboard'}</button>
-    {pagination}</section>
+      {!loading && !error && filteredBooks.length > 0 && <footer className="catalog-pagination-footer">
+        <span className="catalog-pagination-summary">Showing {firstBookNumber}–{lastBookNumber} of {filteredBooks.length} {filteredBooks.length === 1 ? 'book' : 'books'}</span>
+        <nav className="catalog-pagination-nav" aria-label="Catalog pages">
+          <button type="button" className="catalog-page-arrow" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={activePage === 1}>Previous</button>
+          {visiblePages.map((pageNumber) => <button type="button" key={pageNumber} className={activePage === pageNumber ? 'catalog-page-number active' : 'catalog-page-number'} onClick={() => setPage(pageNumber)} aria-current={activePage === pageNumber ? 'page' : undefined} aria-label={`Page ${pageNumber}`}>{pageNumber}</button>)}
+          <button type="button" className="catalog-page-arrow" onClick={() => setPage((current) => Math.min(pageCount, current + 1))} disabled={activePage === pageCount}>Next</button>
+        </nav>
+      </footer>}
+      {role === 'public' && <PublicReservationManager />}
+    </section>
   )
 }
 
@@ -206,7 +365,7 @@ export function MemberBooks({ userId }) {
       {actionError && <div className="inline-error" role="alert">{actionError}</div>}
       {error && <div className="inline-error" role="alert">Unable to load your books. Please try again.</div>}
       {loading && <div className="empty-state loading-state">Loading your borrowed books...</div>}
-      {!loading && !error && loans.length === 0 && <div className="empty-state large">You do not have any active loans.</div>}
+      {!loading && !error && loans.length === 0 && <div className="empty-state large">You do not have any books checked out.</div>}
       {!loading && !error && loans.length > 0 && <div className="loan-grid">{loans.map((loan) => {
         const book = loan.book_copies?.books
         return <article className="loan-card" key={loan.id}>
@@ -218,7 +377,7 @@ export function MemberBooks({ userId }) {
           </div>
         </article>
       })}</div>}
-      <div className="requirement-note"><strong>Circulation policy:</strong> Renewal limits, due-soon status, loan limits, and fines follow the administrator-configured policy.</div>
+      <div className="requirement-note"><strong>Borrowing rules:</strong> Renewal limits, due dates, borrowing limits, and fines follow the library policy.</div>
     </section>
   )
 
@@ -229,14 +388,14 @@ export function MemberBooks({ userId }) {
     setActionMessage('')
     try {
       const { error: renewError } = await supabase.rpc('renew_loan', { p_loan_id: loanId })
-      if (renewError) setActionError('Unable to renew this loan. Please check the circulation policy and try again.')
+      if (renewError) setActionError('Unable to renew this book. Please check the library borrowing rules and try again.')
       else {
-        setActionMessage('Loan renewed successfully.')
+        setActionMessage('Book renewed successfully.')
         setRefreshKey((current) => current + 1)
       }
     } catch (renewError) {
       if (import.meta.env.DEV) console.error('[member books] renewal failed', renewError)
-      setActionError('Unable to renew this loan. Please try again.')
+      setActionError('Unable to renew this book. Please try again.')
     } finally {
       setRenewingId('')
     }
@@ -478,6 +637,8 @@ export function BookDetailsView({ bookId, role, onBack }) {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [saving, setSaving] = useState(false)
+  const [cardNumber, setCardNumber] = useState('')
+  const [reservationPin, setReservationPin] = useState('')
 
   useEffect(() => {
     let active = true
@@ -503,18 +664,36 @@ export function BookDetailsView({ bookId, role, onBack }) {
     return () => { active = false }
   }, [bookId, role])
 
-  const reserveBook = async () => {
+  const reserveBook = async (event) => {
+    event?.preventDefault()
     if (!supabase || !book) return
     setSaving(true)
     setMessage('')
     setError('')
     try {
-      const { error: reservationError } = await supabase.rpc('reserve_book', { p_book_id: book.id })
-      if (reservationError) setError(describeReservationError(reservationError.message))
-      else setMessage('Reservation successfully created or already active.')
+      if (role === 'public') {
+        const { data, error: reservationError } = await supabase.rpc('reserve_book_by_card', {
+          p_card_number: cardNumber.trim(),
+          p_pin: reservationPin,
+          p_book_id: book.id,
+        })
+        if (reservationError) throw reservationError
+        if (data?.verified === false) {
+          setError(describeCardReservationError('card or pin'))
+          return
+        }
+        setMessage(data?.status === 'ready_for_pickup'
+          ? `Your hold is ready. Collect it by ${data.pickup_expires_at ? new Date(data.pickup_expires_at).toLocaleString() : 'the deadline shown under My reservations'}.`
+          : `Your hold is active at queue position ${data?.queue_position ?? 'pending'}. Check “My reservations” for updates and the pickup deadline.`)
+        setReservationPin('')
+      } else {
+        const { error: reservationError } = await supabase.rpc('reserve_book', { p_book_id: book.id })
+        if (reservationError) setError(describeReservationError(reservationError.message))
+        else setMessage('Reservation successfully created or already active.')
+      }
     } catch (reservationError) {
       if (import.meta.env.DEV) console.error('[book details] reservation failed', reservationError)
-      setError(describeReservationError(reservationError?.message))
+      setError(role === 'public' ? describeCardReservationError(reservationError?.message) : describeReservationError(reservationError?.message))
     } finally {
       setSaving(false)
     }
@@ -525,9 +704,8 @@ export function BookDetailsView({ bookId, role, onBack }) {
 
   const copies = book.book_copies ?? []
   const availableCopies = copies.filter((copy) => copy.status === 'available').length
-  const reservedCopies = copies.filter((copy) => copy.status === 'reserved').length
   const availableLocations = [...new Set(copies.filter((copy) => copy.status === 'available').map((copy) => copy.location).filter(Boolean))]
-  const unavailableLabel = reservedCopies > 0 ? 'Reserved' : copies.some((copy) => copy.status === 'borrowed' || copy.status === 'overdue') ? 'Borrowed' : 'Unavailable'
+  const hasCirculatingCopies = copies.some((copy) => ['borrowed', 'overdue', 'reserved'].includes(copy.status))
 
   return (
     <section className="content-section">
@@ -536,7 +714,15 @@ export function BookDetailsView({ bookId, role, onBack }) {
       {error && <div className="inline-error" role="alert">{error}</div>}
       <article className="book-detail-card">
         <div className="book-detail-cover"><BookCover book={book} /></div>
-        <div className="book-detail-content"><span className={availableCopies > 0 ? 'availability available' : 'availability unavailable'}>{availableCopies > 0 ? 'Available' : unavailableLabel}</span>{isDemoSampleBook(book) && <span className="catalog-sample-label">Demo sample · physical holding not verified</span>}<h2>{book.title}</h2><p className="book-detail-author">{book.author}</p><p className="book-detail-description">{book.description || 'No description has been added to the catalog yet.'}</p><dl className="detail-list detail-list-wide"><div><dt>ISBN</dt><dd>{book.isbn || 'Not recorded'}</dd></div><div><dt>Course / subject</dt><dd>{book.course_subject || 'Not tagged'}</dd></div><div><dt>Category</dt><dd>{book.category || 'Uncategorized'}</dd></div><div><dt>Publication year</dt><dd>{book.publication_year || 'Not recorded'}</dd></div><div><dt>Total copies</dt><dd>{copies.length}</dd></div><div><dt>Available copies</dt><dd>{availableCopies}</dd></div><div><dt>Shelf location</dt><dd>{availableLocations.join(', ') || 'Ask at the circulation desk'}</dd></div></dl>{role === 'member' && availableCopies === 0 && !isDemoSampleBook(book) && <button className="primary-button detail-action" onClick={reserveBook} disabled={saving}>{saving ? 'Saving reservation...' : 'Reserve book'}</button>}</div>
+        <div className="book-detail-content"><span className={availableCopies > 0 ? 'availability available' : 'availability unavailable'}>{availableCopies > 0 ? 'Available' : 'Unavailable'}</span><h2>{book.title}</h2><p className="book-detail-author">{book.author}</p><p className="book-detail-description">{book.description || 'No description has been added to the catalog yet.'}</p><dl className="detail-list detail-list-wide"><div><dt>ISBN</dt><dd>{book.isbn || 'Not recorded'}</dd></div><div><dt>Course / subject</dt><dd>{book.course_subject || 'Not tagged'}</dd></div><div><dt>Category</dt><dd>{book.category || 'Uncategorized'}</dd></div><div><dt>Publication year</dt><dd>{book.publication_year || 'Not recorded'}</dd></div><div><dt>Total copies</dt><dd>{copies.length}</dd></div><div><dt>Available copies</dt><dd>{availableCopies}</dd></div><div><dt>Shelf location</dt><dd>{availableLocations.join(', ') || 'Ask at the circulation desk'}</dd></div></dl>{role === 'member' && availableCopies === 0 && hasCirculatingCopies && <button className="primary-button detail-action" onClick={reserveBook} disabled={saving}>{saving ? 'Saving reservation...' : 'Reserve book'}</button>}
+          {role === 'public' && availableCopies === 0 && copies.length > 0 && hasCirculatingCopies && <form className="tool-form public-reserve-form" onSubmit={reserveBook}>
+            <h3>Join the hold queue</h3>
+            <p className="muted">Use your library card and the private reservation PIN issued by staff. Check My reservations in the catalog for queue updates and pickup deadlines.</p>
+            <label>Library card number<input value={cardNumber} onChange={(event) => setCardNumber(event.target.value)} autoComplete="username" maxLength="100" required /></label>
+            <label>Reservation PIN<input type="password" inputMode="numeric" autoComplete="current-password" value={reservationPin} onChange={(event) => setReservationPin(event.target.value.replace(/\D/g, '').slice(0, 12))} minLength="6" maxLength="12" pattern="[0-9]{6,12}" required /></label>
+            <button className="primary-button" disabled={saving || !cardNumber.trim() || reservationPin.length < 6}>{saving ? 'Placing hold...' : 'Reserve this book'}</button>
+          </form>}
+          {role === 'public' && copies.length > 0 && availableCopies === 0 && !hasCirculatingCopies && <p className="requirement-note">No copies are currently circulating, so this title cannot be queued online. Ask library staff for help.</p>}</div>
       </article>
       {role !== 'public' && <div className="requirement-note"><strong>Catalog note:</strong> See Reservations for your queue position, assigned copy, and pickup deadline.</div>}
     </section>
