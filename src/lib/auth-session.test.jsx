@@ -23,8 +23,8 @@ function AuthActions() {
   const { createMemberAccount, signIn, signOut } = useAuth()
   return <div>
     <button onClick={() => createMemberAccount({ fullName: 'Student Example', email: 'STUDENT@EXAMPLE.EDU', schoolId: 'stu-123', password: 'long-password-value' })}>Register test student</button>
-    <button onClick={() => signIn('STUDENT@example.edu', 'long-password-value')}>Sign in by email</button>
-    <button onClick={() => signIn(' stu-123 ', 'long-password-value')}>Sign in by School ID</button>
+    <button onClick={() => signIn('ADMIN@EXAMPLE.EDU', 'long-password-value')}>Sign in by email</button>
+    <button onClick={() => signIn(' TEMP-ADMIN-2026 ', 'long-password-value')}>Sign in by School ID</button>
     <button onClick={() => signOut()}>Sign out test account</button>
   </div>
 }
@@ -85,21 +85,21 @@ describe('session/profile races', () => {
     expect(credentials.email).toBe('student@example.edu')
     expect(credentials.options.data).toEqual({ full_name: 'Student Example', registration_school_id: 'STU-123' })
   })
-  it('automatically routes an email identifier through the email auth function', async () => {
+  it('routes an existing staff email through the email auth function', async () => {
     mock.getSession.mockResolvedValue({ data: { session: null }, error: null })
     render(<AuthProvider><AuthActions /></AuthProvider>)
     fireEvent.click(screen.getByRole('button', { name: 'Sign in by email' }))
     await waitFor(() => expect(mock.invoke).toHaveBeenCalledWith('email-auth', {
-      body: { email: 'student@example.edu', password: 'long-password-value' },
+      body: { email: 'admin@example.edu', password: 'long-password-value' },
     }))
     expect(mock.setSession).toHaveBeenCalledWith({ user: { id: 'A' } })
   })
-  it('automatically routes a School ID through the server-side School ID auth function', async () => {
+  it('routes the existing administrator School ID through the server-side auth function', async () => {
     mock.getSession.mockResolvedValue({ data: { session: null }, error: null })
     render(<AuthProvider><AuthActions /></AuthProvider>)
     fireEvent.click(screen.getByRole('button', { name: 'Sign in by School ID' }))
     await waitFor(() => expect(mock.invoke).toHaveBeenCalledWith('school-id-auth', {
-      body: { action: 'sign-in', schoolId: 'stu-123', password: 'long-password-value', invitation: '' },
+      body: { action: 'sign-in', schoolId: 'TEMP-ADMIN-2026', password: 'long-password-value', invitation: '' },
     }))
     expect(mock.setSession).toHaveBeenCalledWith({ user: { id: 'A' } })
   })

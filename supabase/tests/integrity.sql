@@ -36,7 +36,19 @@ insert into public.books(id,title,author) values
  ('20000000-0000-0000-0000-000000000005','Linked account queue','Author'),
  ('20000000-0000-0000-0000-000000000006','Accountless online hold','Author');
 select public.test_assert((select value='3'::jsonb from public.system_settings where key='loan_period_days'),'default loan period is three days');
-update public.profiles set role='administrator' where id in ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002');
+update public.profiles set role='administrator', school_id=case
+  when id='00000000-0000-0000-0000-000000000001' then 'TEMP-ADMIN-2026'
+  else school_id end
+where id in ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002');
+update public.profiles set role='librarian', school_id='TEMP-LIBRARIAN-2026'
+where id='00000000-0000-0000-0000-000000000007';
+update public.library_members set auth_user_id=null
+where auth_user_id in ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000007');
+update auth.users set email=case
+  when id='00000000-0000-0000-0000-000000000001' then 'temp-admin@example.edu'
+  when id='00000000-0000-0000-0000-000000000007' then 'temp-librarian@example.edu'
+  else email end
+where id in ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000007');
 insert into public.books(id,title,author) values ('20000000-0000-0000-0000-000000000001','Test book','Author'),('20000000-0000-0000-0000-000000000002','Queue race','Author');
 update public.books set course_subject='Accounting, Business Management' where id='20000000-0000-0000-0000-000000000001';
 insert into public.book_copies(id,book_id,barcode)
@@ -113,6 +125,8 @@ select public.test_assert(public.current_user_has_active_library_member(),'linke
 reset role;
 set role service_role;
 select public.test_assert(public.school_login_email(' stu-self-signup ')='self.signup@example.edu','School ID login resolves only to the verified member email');
+select public.test_assert(public.school_login_email(' temp-admin-2026 ')='temp-admin@example.edu','administrator School ID resolves to its existing Auth email');
+select public.test_assert(public.school_login_email('TEMP-LIBRARIAN-2026')='temp-librarian@example.edu','librarian School ID resolves without a borrower-member link');
 reset role;
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000008';
