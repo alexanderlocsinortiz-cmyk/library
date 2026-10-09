@@ -1,6 +1,46 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
+const DETAIL_LABELS = {
+  expected_copies: 'Expected shelf copies',
+  found: 'Copies found',
+  not_found: 'Copies not found',
+  status_changed: 'Copies with changed status',
+  wrong_location: 'Copies at the wrong location',
+  unknown_barcode: 'Unknown barcodes',
+  location_scope: 'Shelf',
+}
+
+function formatDetailLabel(key) {
+  return DETAIL_LABELS[key] || key.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function formatDetailValue(value) {
+  if (value == null || value === '') return 'Not recorded'
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  if (Array.isArray(value)) return value.length ? value.map(formatDetailValue).join(', ') : 'None'
+  if (typeof value === 'object') {
+    const entries = Object.entries(value)
+    if (!entries.length) return 'None'
+    return <dl className="transaction-detail-list transaction-detail-list-nested">
+      {entries.map(([key, nestedValue]) => <div key={key}><dt>{formatDetailLabel(key)}</dt><dd>{formatDetailValue(nestedValue)}</dd></div>)}
+    </dl>
+  }
+  return String(value).replaceAll('_', ' ')
+}
+
+function TransactionDetails({ details }) {
+  const entries = details && typeof details === 'object' && !Array.isArray(details) ? Object.entries(details) : []
+
+  if (!entries.length) {
+    return <p className="transaction-details-empty">No additional details recorded.</p>
+  }
+
+  return <dl className="transaction-detail-list">
+    {entries.map(([key, value]) => <div key={key}><dt>{formatDetailLabel(key)}</dt><dd>{formatDetailValue(value)}</dd></div>)}
+  </dl>
+}
+
 export function TransactionHistory() {
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(0)
@@ -28,7 +68,7 @@ export function TransactionHistory() {
     {loading ? <div className="empty-state loading-state" role="status">Loading transaction history...</div> : !error && <>
       <p className="catalog-result-count" aria-live="polite">{result.total} matching {result.total === 1 ? 'event' : 'events'}</p>
       {result.items.length === 0 ? <div className="empty-state large">{query.trim() ? 'No transactions match your search.' : 'No transactions have been recorded yet.'}<p>Checkouts, returns, reservations, and staff actions will appear here.</p></div> : <div className="table-wrap"><table><thead><tr><th>Date</th><th>Action</th><th>Member</th><th>Book / copy</th><th>Staff</th><th>Details</th></tr></thead>
-        <tbody>{result.items.map((item) => <tr key={item.id}><td>{item.created_at ? new Date(item.created_at).toLocaleString() : 'Not recorded'}</td><td><span className="table-status" data-status={item.action}>{item.action.replaceAll('_', ' ')}</span></td><td>{item.member_name || '—'}{item.school_id && <small className="table-subtext">{item.school_id}</small>}</td><td>{item.title || item.entity_type}{item.barcode && <small className="table-subtext">{item.barcode}</small>}</td><td>{item.actor_name || 'Scheduled / system'}</td><td><details><summary>Record details</summary><code className="transaction-details">{JSON.stringify(item.details)}</code></details></td></tr>)}</tbody>
+        <tbody>{result.items.map((item) => <tr key={item.id}><td>{item.created_at ? new Date(item.created_at).toLocaleString() : 'Not recorded'}</td><td><span className="table-status" data-status={item.action}>{item.action.replaceAll('_', ' ')}</span></td><td>{item.member_name || '—'}{item.school_id && <small className="table-subtext">{item.school_id}</small>}</td><td>{item.title || item.entity_type}{item.barcode && <small className="table-subtext">{item.barcode}</small>}</td><td>{item.actor_name || 'Scheduled / system'}</td><td><details><summary>Record details</summary><div className="transaction-details"><TransactionDetails details={item.details} /></div></details></td></tr>)}</tbody>
       </table></div>}
     </>}
     {!loading && !error && result.total > 25 && <nav className="pagination" aria-label="History pages"><button type="button" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button><span aria-live="polite">Page {page + 1} of {Math.ceil(result.total / 25)}</span><button type="button" disabled={(page + 1) * 25 >= result.total} onClick={() => setPage(page + 1)}>Next</button></nav>}

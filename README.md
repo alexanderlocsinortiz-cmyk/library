@@ -12,7 +12,7 @@ npm run dev
 
 Add the Supabase project URL and publishable key to `.env.local`.
 
-Students may browse and use the library desk without an online account. A student who wants account features can register with their name, email, School ID, and password. Email confirmation proves control of the email; a library card number and staff-issued PIN then link the account to the member record staff already created. The School ID alone never grants access to a borrower record. Member self-registration cannot create staff roles. Staff accounts remain administrator-provisioned and should sign in with email.
+Anyone creating an online member account registers with a name, email, School ID, and password, then confirms control of that email through a Supabase link. The School ID is saved as registration information only; it is not checked against student or library records. No library card, PIN, or staff review is required for signup. Email confirmation does not prove student status; each account gets a separate email-only borrower record and does not inherit an existing member's loans or reservations. LMS identity matching can be added later. Staff still records physical checkouts and returns at the library desk, and member self-registration cannot create staff roles.
 
 Local Supabase Auth enables email registration and confirmation in `supabase/config.toml`. On a hosted project, enable email sign-ups and email confirmations, add the app URL to the allowed redirect URLs, and keep staff account creation restricted to trusted administrators. Apply the migrations in order and deploy both authentication Edge Functions. Do not enable SMS authentication unless staff specifically need phone-based sign-in.
 
@@ -37,6 +37,8 @@ supabase/migrations/015_walk_in_reservations.sql
 supabase/migrations/016_activity_logs.sql
 ```
 
+Apply all later migrations in filename order through `034_email_only_member_accounts.sql`; migration 034 is required for email-only account creation and online holds.
+
 The `school-id-auth` Edge Function resolves a verified member School ID to that member's email account. The `email-auth` Edge Function records successful and failed email or phone login attempts server-side. Deploy them after applying the migrations:
 
 ```bash
@@ -46,7 +48,7 @@ supabase functions deploy email-auth
 
 The function uses Supabase server-side environment variables and must never be copied into browser code. School ID password recovery still requires a staff-issued invitation. See [REMEDIATION.md](REMEDIATION.md) before upgrading an existing database.
 
-Registration flow: staff first register the student or teacher in Members with the correct School ID and physical library card, then set a private 6–12 digit PIN if needed. The student creates an email account, confirms the email, signs in, and enters their School ID, card number, and PIN once. Only then is the Auth account linked to the verified member record. Students without accounts can still search the public catalog and borrow through staff. Existing unverified School ID claims are not trusted automatically.
+Registration flow: the person enters their name, email, School ID, and password, then clicks the Supabase confirmation link. The School ID is stored as an unverified registration detail and does not link the account to a student or borrower record. After confirmation, the database creates a separate provisional borrower record that can place online holds. Staff handles pickup, checkout, and return at the desk. The email proves mailbox control only; add LMS matching later if online accounts must be limited to enrolled students.
 
 Staff accounts are provisioned by an administrator. Role changes must be performed by an administrator through the secured `change_member_role` workflow; direct browser profile updates are blocked.
 
@@ -62,8 +64,8 @@ where id = 'USER_UUID_HERE';
 
 - Three roles: Member, Librarian, Administrator
 - Supabase Auth with email confirmation, optional member self-registration, and administrator-provisioned staff accounts
-- Verified member account linking using staff-recorded School ID, library card, and private PIN
-- Separate staff-managed borrower records with physical library card numbers and optional account links
+- Email-confirmed member accounts with separate email-only borrower records
+- Separate staff-managed physical borrower records; LMS-based identity matching is deferred
 - Role-aware dashboard foundation
 - Catalog, copies, reservations, loans, notifications, administrator activity logs, and settings schema
 - Baseline reservation, checkout, return, catalog-management, and role-management workflows
@@ -85,6 +87,40 @@ Migration 012 removes Supabase's direct `anon` EXECUTE grants from public-schema
 Migration 013 adds account-free online holds. Staff verify the physical card, register the member, and optionally set a private 6–12 digit reservation PIN in Members. Give that PIN directly to the cardholder. They can search the public catalog, join the first-come-first-served queue when every copy is out or assigned, then use the card number and PIN under **Check or cancel a reservation** to see their queue place or pickup deadline and cancel a hold. Five incorrect PIN attempts temporarily lock online reservation access for 15 minutes. The PIN is stored as a bcrypt hash; it is not an email/password account. There are no reservation emails, so cardholders check the catalog for updates. Staff still scan the physical book at checkout and return; an online hold never marks a book borrowed or returned.
 
 Migration 016 adds an administrator-only, append-only activity stream with server-side pagination and combined filters. Database triggers record committed catalog, member, reservation, borrowing, role, and settings changes. The authentication Edge Functions record successful and failed logins and password recovery changes; failed login identifiers are masked.
+
+### Registration email verification and cleanup
+
+Migration `025_registration_expiration_and_cleanup.sql` adds a server-controlled registration deadline (30 minutes by default), backend resend limits, an email-confirmation deadline guard, and a one-minute `pg_cron` cleanup job. Administrators can change the registration completion period in User Management; the allowed range is 5 to 1,440 minutes. Expired account removal uses the `registration-lifecycle` Edge Function and Supabase Auth Admin API. The cleanup rechecks email confirmation, legacy open assistance requests, member links, and all borrowing/reservation history before deletion. A successful or failed cleanup attempt is recorded in Activity Logs. Verified accounts and protected library records are retained.
+
+Migration `030_cancel_pending_member_registration.sql` lets a member cancel an unconfirmed registration after proving the registration password. Migration `031_auth_email_link_audit.sql` updates staff recovery audit entries to record verification-email delivery accurately.
+
+
+Migration `034_email_only_member_accounts.sql` removes School ID matching from self-service account creation. The School ID remains an unverified registration detail. Confirming the Supabase email link creates a separate provisional borrower record for online holds; it does not validate student status or attach the account to an existing physical borrower record. Unfinished manual-assistance requests are withdrawn and the old self-link and review RPCs are disabled. Staff still checks out books at the desk.
+
+Unconfirmed member registrations that existed before migration 025 receive a fresh 30-minute transition window; the rollout does not immediately delete them. Only registrations with a stored School ID claim are assigned this deadline. Other pre-existing accounts are left intact for manual review.
+
+The hosted project needs these settings in addition to applying the migration:
+
+- In **Authentication → Providers → Email**, keep email signups and email confirmations enabled. In **Authentication → Email Templates → Confirm signup**, use `{{ .ConfirmationURL }}` so registration sends a clickable verification link; the checked-in `supabase/templates/confirmation.html` is the local template. Keep the email resend frequency at 60 seconds or longer. Password recovery still uses a six-digit code.
+- If `registration-assistance` or `admin-verification-email` was previously deployed, remove those hosted Edge Functions; migration 034 disables their obsolete review and request RPCs.
+- Deploy `registration-lifecycle` and set the Edge Function secret `REGISTRATION_CLEANUP_SECRET` to a freshly generated random value. Do not put this secret in `.env.local`, frontend code, or source control.
+- Store the same cleanup secret and the project's base URL in Supabase Vault using the names `registration_cleanup_secret` and `supabase_project_url`. The migration schedules the cron call when `pg_cron`, `pg_net`, and Vault are available; the project must have those extensions enabled.
+
+Deploy after applying database migrations:
+
+```bash
+npx supabase functions deploy registration-lifecycle
+npx supabase secrets set REGISTRATION_CLEANUP_SECRET=<fresh-random-secret>
+```
+
+In the Supabase SQL Editor, save the same generated secret and project URL in Vault (replace the placeholders without committing the values):
+
+```sql
+select vault.create_secret('https://<project-ref>.supabase.co', 'supabase_project_url');
+select vault.create_secret('<same-fresh-random-secret>', 'registration_cleanup_secret');
+```
+
+The confirmation link expires independently. A link failure does not trigger deletion; only a registration past its server deadline enters cleanup, and previously approved legacy identity links remain protected until email verification is complete.
 
 ## Pre-testing checklist
 

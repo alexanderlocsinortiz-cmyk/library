@@ -25,6 +25,7 @@ function makeBooks(count = 25) {
 }
 
 beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ docs: [] }) }))
   mock.books = makeBooks()
   mock.rpc.mockResolvedValue({ data: true, error: null })
   mock.from.mockImplementation(() => ({
@@ -35,25 +36,28 @@ beforeEach(() => {
   }))
 })
 
-afterEach(() => { cleanup(); vi.clearAllMocks() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks() })
 
 describe('CatalogPage browsing', () => {
-  it('shows twelve compact cards per page with a numbered range summary', async () => {
+  it('shows six compact cards per member page with a numbered range summary', async () => {
     render(<CatalogPage role="member" onBack={vi.fn()} />)
     await screen.findByRole('heading', { name: 'Browse Books' })
     await screen.findByRole('button', { name: 'View details for Title 00' })
 
-    expect(screen.getAllByRole('article')).toHaveLength(12)
-    expect(screen.getByText('Showing 1–12 of 25 books')).toBeInTheDocument()
+    expect(screen.getAllByRole('article')).toHaveLength(6)
+    expect(screen.getByText('Showing 1–6 of 25 books')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Page 1' })).toHaveAttribute('aria-current', 'page')
 
     fireEvent.click(screen.getByRole('button', { name: 'Page 2' }))
-    expect(await screen.findByRole('button', { name: 'View details for Title 12' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'View details for Title 06' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'View details for Title 00' })).not.toBeInTheDocument()
-    expect(screen.getByText('Showing 13–24 of 25 books')).toBeInTheDocument()
+    expect(screen.getByText('Showing 7–12 of 25 books')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    expect(await screen.findByRole('button', { name: 'View details for Title 12' })).toBeInTheDocument()
+    expect(screen.getByText('Showing 13–18 of 25 books')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Page 5' }))
     expect(await screen.findByRole('button', { name: 'View details for Title 24' })).toBeInTheDocument()
     expect(screen.getByText('Showing 25–25 of 25 books')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
@@ -63,7 +67,7 @@ describe('CatalogPage browsing', () => {
     render(<CatalogPage role="member" />)
     await screen.findByRole('button', { name: 'View details for Title 00' })
     fireEvent.click(screen.getByRole('button', { name: 'Page 2' }))
-    await screen.findByRole('button', { name: 'View details for Title 12' })
+    await screen.findByRole('button', { name: 'View details for Title 06' })
 
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search library' }), { target: { value: 'Title 10' } })
     fireEvent.change(screen.getByRole('combobox', { name: 'Filter availability' }), { target: { value: 'available' } })
@@ -79,19 +83,19 @@ describe('CatalogPage browsing', () => {
     expect(await screen.findByRole('button', { name: 'View details for Title 00' })).toBeInTheDocument()
     expect(screen.getByRole('searchbox', { name: 'Search library' })).toHaveValue('')
     expect(screen.getByRole('combobox', { name: 'Filter availability' })).toHaveValue('all')
-    expect(screen.getAllByRole('article')).toHaveLength(12)
+    expect(screen.getAllByRole('article')).toHaveLength(6)
   })
 
   it('resets the current page after changing sort order', async () => {
     render(<CatalogPage role="member" />)
     await screen.findByRole('button', { name: 'View details for Title 00' })
     fireEvent.click(screen.getByRole('button', { name: 'Page 2' }))
-    await screen.findByRole('button', { name: 'View details for Title 12' })
+    await screen.findByRole('button', { name: 'View details for Title 06' })
 
     fireEvent.change(screen.getByRole('combobox', { name: 'Sort catalog' }), { target: { value: 'newest' } })
 
     expect(await screen.findByRole('button', { name: 'View details for Title 24' })).toBeInTheDocument()
-    expect(screen.getByText('Showing 1–12 of 25 books')).toBeInTheDocument()
+    expect(screen.getByText('Showing 1–6 of 25 books')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Page 1' })).toHaveAttribute('aria-current', 'page')
   })
 
@@ -106,14 +110,32 @@ describe('CatalogPage browsing', () => {
     expect(await screen.findByRole('heading', { name: 'Browse Books' })).toBeInTheDocument()
   })
 
-  it('keeps member reservation actions available on unavailable titles', async () => {
+  it('opens a requested book directly from the member dashboard handoff', async () => {
+    const onInitialBookOpened = vi.fn()
+    render(<CatalogPage role="member" initialBookId="book-13" onInitialBookOpened={onInitialBookOpened} />)
+
+    expect(await screen.findByRole('heading', { name: 'Title 13' })).toBeInTheDocument()
+    expect(onInitialBookOpened).toHaveBeenCalledOnce()
+  })
+
+  it('lets a member place a pickup hold on an available copy', async () => {
     render(<CatalogPage role="member" />)
     await screen.findByRole('button', { name: 'View details for Title 00' })
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Reserve' })[0])
 
-    await waitFor(() => expect(mock.rpc).toHaveBeenCalledWith('reserve_book', { p_book_id: 'book-1' }))
-    expect(await screen.findByRole('status')).toHaveTextContent('Reservation successfully created')
+    await waitFor(() => expect(mock.rpc).toHaveBeenCalledWith('reserve_book', { p_book_id: 'book-0' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Reservation request placed')
+  })
+
+  it('offers the pickup hold action in book details when a copy is available', async () => {
+    render(<CatalogPage role="member" />)
+    fireEvent.click(await screen.findByRole('button', { name: 'View details for Title 00' }))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reserve for pickup' }))
+
+    await waitFor(() => expect(mock.rpc).toHaveBeenCalledWith('reserve_book', { p_book_id: 'book-0' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Reservation request placed')
   })
 
   it('shows cover placeholders and the loading skeleton accessibly', async () => {

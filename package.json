@@ -12,13 +12,14 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:db": "node scripts/test-db.mjs",
-    "check:edge": "deno check supabase/functions/school-id-auth/index.ts"
+    "check:edge": "deno check supabase/functions/school-id-auth/index.ts supabase/functions/email-auth/index.ts supabase/functions/registration-lifecycle/index.ts supabase/functions/admin-delete-user/index.ts"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
     "@mui/material": "^9.4.0",
     "@supabase/supabase-js": "^2.57.0",
+    "@zxing/browser": "^0.1.5",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

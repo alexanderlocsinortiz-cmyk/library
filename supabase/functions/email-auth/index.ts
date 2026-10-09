@@ -25,6 +25,13 @@ function maskIdentifier(value: string, isPhone: boolean) {
     : `${value.trim().slice(0, 1) || '*'}***`
 }
 
+function isCredentialRejection(error: { status?: number; code?: string } | null | undefined) {
+  return Boolean(error && (
+    [400, 401, 422].includes(error.status ?? 0)
+    || ['invalid_credentials', 'email_not_confirmed'].includes(error.code ?? '')
+  ))
+}
+
 const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
 const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
 const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -83,11 +90,22 @@ Deno.serve(async (request) => {
     }
 
     const { data, error } = await auth.auth.signInWithPassword({ ...(isPhone ? { phone } : { email }), password })
-    if (error || !data.session) {
-      await recordAuthActivity('failed_login', identifier, isPhone)
-      // Do not reveal whether an account exists, is confirmed, or uses a
-      // different credential. Keep the response identical for login failures.
-      return json({ ok: false, error: { message: 'Invalid email, School ID, or password.' } })
+    if (error) {
+      if (error.status === 429) {
+        return json({ ok: false, error: { message: 'Too many sign-in attempts. Try again in 15 minutes.' } }, 429)
+      }
+      if (isCredentialRejection(error)) {
+        await recordAuthActivity('failed_login', identifier, isPhone)
+        // Do not reveal whether an account exists, is confirmed, or uses a
+        // different credential. Keep the response identical for login failures.
+        return json({ ok: false, error: { message: 'Invalid email, School ID, or password.' } })
+      }
+      console.error('[email-auth] password verification service failed', error.status ?? 'unknown', error.code ?? 'unknown')
+      return json({ ok: false, error: { message: 'Email authentication could not be completed.' } }, 503)
+    }
+    if (!data.session) {
+      console.error('[email-auth] password verification returned no session')
+      return json({ ok: false, error: { message: 'Email authentication could not be completed.' } }, 503)
     }
 
     await recordAuthActivity('login_success', identifier, isPhone, data.user.id)

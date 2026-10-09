@@ -19,15 +19,15 @@ select public.test_assert(not has_function_privilege('anon','public.close_loan_w
 select public.test_assert(not has_function_privilege('anon','public.library_analytics(timestamptz,timestamptz,text)'::regprocedure,'execute'),'anonymous role cannot execute staff analytics RPC');
 select public.test_assert(not has_function_privilege('anon','public.reserve_book(uuid)'::regprocedure,'execute'),'anonymous role cannot execute member reservation RPC');
 select public.test_assert(not has_function_privilege('anon','public.change_member_role(uuid,public.app_role)'::regprocedure,'execute'),'anonymous role cannot execute administrator role RPC');
-select public.test_assert(has_function_privilege('anon','public.reserve_book_by_card(text,text,uuid)'::regprocedure,'execute'),'anonymous role can use the bounded card-and-PIN hold RPC');
+select public.test_assert(not has_function_privilege('anon','public.reserve_book_by_card(text,text,uuid)'::regprocedure,'execute') and not has_function_privilege('authenticated','public.reserve_book_by_card(text,text,uuid)'::regprocedure,'execute'),'card/PIN cannot create reservations without a linked member account');
 select public.test_assert(has_function_privilege('anon','public.card_reservation_status(text,text)'::regprocedure,'execute') and has_function_privilege('anon','public.cancel_card_reservation(text,text,uuid)'::regprocedure,'execute'),'anonymous cardholders can check and cancel only with card and PIN');
 select public.test_assert(not has_function_privilege('anon','public.verify_library_card_reservation_pin(text,text)'::regprocedure,'execute'),'anonymous role cannot call the internal PIN verifier');
 select public.test_assert(not has_function_privilege('anon','public.set_library_card_reservation_pin(uuid,text)'::regprocedure,'execute'),'anonymous role cannot set cardholder PINs');
 create function public.test_default_anon_function_acl() returns integer language sql as $$select 1$$;
 select public.test_assert(not has_function_privilege('anon','public.test_default_anon_function_acl()'::regprocedure,'execute'),'new public functions do not inherit anonymous or PUBLIC EXECUTE');
 drop function public.test_default_anon_function_acl();
-insert into auth.users(id,raw_user_meta_data)
-select ('00000000-0000-0000-0000-'||lpad(n::text,12,'0'))::uuid,jsonb_build_object('full_name','User '||n) from generate_series(1,7) n;
+insert into auth.users(id,email,email_confirmed_at,raw_user_meta_data)
+select ('00000000-0000-0000-0000-'||lpad(n::text,12,'0'))::uuid,'test-user-'||n||'@example.edu',now(),jsonb_build_object('full_name','User '||n) from generate_series(1,7) n;
 insert into public.library_members(id,full_name,library_card_number,member_type,auth_user_id)
 select id,full_name,'CARD-'||right(replace(id::text,'-',''),12),'student',id from public.profiles;
 insert into public.books(id,title,author) values
@@ -42,6 +42,27 @@ update public.profiles set role='administrator', school_id=case
 where id in ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002');
 update public.profiles set role='librarian', school_id='TEMP-LIBRARIAN-2026'
 where id='00000000-0000-0000-0000-000000000007';
+do $$
+begin
+  begin
+    update public.profiles set school_id=' temp-admin-2026 '
+    where id='00000000-0000-0000-0000-000000000002';
+    raise exception 'Expected normalized profile School ID collision to be rejected';
+  exception when unique_violation then
+    null;
+  end;
+
+  update public.library_members set school_id='TEST-MEMBER-ID'
+  where id='00000000-0000-0000-0000-000000000001';
+  begin
+    update public.library_members set school_id=' test-member-id '
+    where id='00000000-0000-0000-0000-000000000002';
+    raise exception 'Expected normalized library-member School ID collision to be rejected';
+  exception when unique_violation then
+    null;
+  end;
+end;
+$$;
 update public.library_members set auth_user_id=null
 where auth_user_id in ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000007');
 update auth.users set email=case
@@ -66,7 +87,12 @@ reset role;
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000003';
 select public.test_denied($q$insert into public.reservations(book_id,member_id,status,created_at) values('20000000-0000-0000-0000-000000000001',auth.uid(),'ready_for_pickup','2000-01-01')$q$,'permission denied');
-select public.test_denied($q$select public.reserve_book('20000000-0000-0000-0000-000000000001')$q$,'does not need');
+select public.reserve_book('20000000-0000-0000-0000-000000000001') as linked_available_hold \gset
+select public.test_assert((select r.status='ready_for_pickup' and r.copy_id is not null
+  and r.pickup_expires_at>now() and c.status='reserved'
+  from public.reservations r join public.book_copies c on c.id=r.copy_id
+  where r.id=:'linked_available_hold'), 'a member can reserve an available copy for pickup');
+select public.cancel_reservation(:'linked_available_hold');
 select public.test_denied($q$select public.checkout_copy('10000000-0000-0000-0000-000000000001',auth.uid())$q$,'Only Librarians');
 select public.test_denied('select public.process_circulation()','permission denied');
 select public.test_denied('select public.allocate_pickup_holds(null)','permission denied');
@@ -75,6 +101,7 @@ select public.test_denied($q$select public.register_library_member('Blocked','BL
 select public.test_denied($q$select public.staff_reserve_book('20000000-0000-0000-0000-000000000003',auth.uid())$q$,'Staff access');
 select public.test_denied($q$select public.record_book_request('Unowned title')$q$,'Staff access');
 select public.test_denied($q$select public.start_inventory_audit()$q$,'Staff access');
+select public.test_denied($q$select public.start_inventory_audit_for_shelf('Fiction')$q$,'Staff access');
 select public.test_denied($q$insert into public.book_requests(requested_title) values('Unauthorized request')$q$,'permission denied');
 select public.test_denied($q$insert into public.inventory_audits default values$q$,'permission denied');
 select public.test_denied($q$select public.link_library_member_account(auth.uid(),auth.uid())$q$,'Staff access');
@@ -108,8 +135,8 @@ insert into auth.users(id,email,raw_user_meta_data) values(
 select public.test_assert((select school_id is null and role='member' from public.profiles where id='00000000-0000-0000-0000-000000000008'),'signup School ID is only an unverified claim until card verification');
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000008';
-select public.test_assert(not public.current_user_has_active_library_member(),'unlinked account cannot access member pages before identity verification');
-select public.test_denied($q$select public.complete_member_account_registration('STU-SELF-SIGNUP','CARD-SELF-SIGNUP','24681357')$q$,'Confirm your email');
+select public.test_assert(not public.current_user_has_active_library_member(),'unconfirmed account has no active borrower record');
+select public.test_denied($q$select public.complete_member_account_registration('STU-SELF-SIGNUP','CARD-SELF-SIGNUP','24681357')$q$,'permission denied');
 reset role;
 update auth.users set email_confirmed_at=now() where id='00000000-0000-0000-0000-000000000008';
 set role service_role;
@@ -117,16 +144,23 @@ select public.test_assert(public.school_login_email('STU-SELF-SIGNUP') is null,'
 reset role;
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000008';
-select public.test_assert((public.complete_member_account_registration('STU-OTHER','CARD-SELF-SIGNUP','24681357')->>'verified')::boolean is false,'a verified card cannot be linked to a different School ID');
-select public.test_assert((public.complete_member_account_registration('STU-SELF-SIGNUP','CARD-SELF-SIGNUP','00000000')->>'verified')::boolean is false,'an incorrect library PIN cannot link an account');
-select public.test_assert((public.complete_member_account_registration('STU-SELF-SIGNUP','CARD-SELF-SIGNUP','24681357')->>'verified')::boolean,'email-confirmed account can link only with matching staff-verified School ID and card PIN');
-select public.test_assert((select p.school_id='STU-SELF-SIGNUP' and m.auth_user_id=p.id from public.profiles p join public.library_members m on m.school_id=p.school_id where p.id='00000000-0000-0000-0000-000000000008'),'registration links the profile to the correct library member');
-select public.test_assert(public.current_user_has_active_library_member(),'linked active account passes the member access gate');
+select public.test_denied($q$select public.complete_member_account_registration('STU-SELF-SIGNUP','CARD-SELF-SIGNUP','24681357')$q$,'permission denied');
+select public.test_assert((select p.school_id is null and m.school_id is null and m.library_card_number is null and m.email_only and m.auth_user_id=p.id from public.profiles p join public.library_members m on m.auth_user_id=p.id where p.id='00000000-0000-0000-0000-000000000008'),'email confirmation creates a separate email-only borrower record without linking an ID or card');
+select public.test_assert(public.current_user_has_active_library_member(),'email-confirmed account passes the member access gate');
+select public.reserve_book('20000000-0000-0000-0000-000000000006') as email_only_available_hold \gset
+select public.test_assert((select r.status='ready_for_pickup' and r.copy_id is not null
+  and r.pickup_expires_at>now() and c.status='reserved'
+  from public.reservations r join public.book_copies c on c.id=r.copy_id
+  where r.id=:'email_only_available_hold'), 'an email-only member can reserve an available copy for pickup');
+select public.cancel_reservation(:'email_only_available_hold');
+select public.test_denied($q$select public.reserve_book_by_card('CARD-SELF-SIGNUP','24681357','20000000-0000-0000-0000-000000000006')$q$,'permission denied');
 reset role;
 set role service_role;
-select public.test_assert(public.school_login_email(' stu-self-signup ')='self.signup@example.edu','School ID login resolves only to the verified member email');
+select public.test_assert(public.school_login_email(' stu-self-signup ') is null,'School ID login does not resolve before staff links a verified member record');
 select public.test_assert(public.school_login_email(' temp-admin-2026 ')='temp-admin@example.edu','administrator School ID resolves to its existing Auth email');
 select public.test_assert(public.school_login_email('TEMP-LIBRARIAN-2026')='temp-librarian@example.edu','librarian School ID resolves without a borrower-member link');
+select public.test_assert(public.school_login_email('NO-SUCH-ID-2026') is null,'unknown School ID never resolves to an account');
+select public.test_assert(public.school_login_email('   ') is null,'blank School ID never resolves to an account');
 reset role;
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000008';
@@ -135,6 +169,7 @@ reset role;
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
 select public.checkout_copy('10000000-0000-0000-0000-000000000013','00000000-0000-0000-0000-000000000003') as card_hold_loan \gset
+select public.staff_reserve_book('20000000-0000-0000-0000-000000000006',:'walkin_member') as card_hold_reservation \gset
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000003';
 select public.test_denied($q$select public.set_library_card_reservation_pin('00000000-0000-0000-0000-000000000003','87654321')$q$,'Staff access');
 select public.test_denied($q$select public.set_library_card_reservation_pin('00000000-0000-0000-0000-000000000003','123')$q$,'Staff access');
@@ -143,14 +178,13 @@ reset role;
 set request.jwt.claim.sub = '';
 set role anon;
 select public.test_denied($q$select * from public.library_member_reservation_pins$q$,'permission denied');
-select public.test_assert((public.reserve_book_by_card('CARD-WALKIN-1','87654321','20000000-0000-0000-0000-000000000006')->>'verified')::boolean is false,'incorrect PIN is rejected without rolling back the rate limit');
-select public.test_assert((public.reserve_book_by_card('CARD-WALKIN-1','12345678','20000000-0000-0000-0000-000000000006')->'verified')::boolean and (public.reserve_book_by_card('CARD-WALKIN-1','12345678','20000000-0000-0000-0000-000000000006')->'queue_position')::text='1','cardholder can enter the first online hold queue position');
+select public.test_denied($q$select public.reserve_book_by_card('CARD-WALKIN-1','12345678','20000000-0000-0000-0000-000000000006')$q$,'permission denied');
 select public.test_assert((public.card_reservation_status('CARD-WALKIN-1','12345678')->>'verified')::boolean and jsonb_array_length(public.card_reservation_status('CARD-WALKIN-1','12345678')->'reservations')=1,'cardholder can securely look up their active holds');
 reset role;
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
 select public.return_loan(:'card_hold_loan');
-select public.test_assert((select r.status='ready_for_pickup' and c.status='reserved' from public.reservations r join public.book_copies c on c.id=r.copy_id where r.member_id=:'walkin_member' and r.book_id='20000000-0000-0000-0000-000000000006'),'return assigns a physical copy to the accountless online hold');
+select public.test_assert((select r.status='ready_for_pickup' and c.status='reserved' from public.reservations r join public.book_copies c on c.id=r.copy_id where r.member_id=:'walkin_member' and r.book_id='20000000-0000-0000-0000-000000000006'),'return assigns a physical copy to an accountless staff-created hold');
 select public.test_assert((select count(*)=0 from public.notifications where member_id=:'walkin_member'),'accountless pickup notification does not violate profile-keyed notifications');
 reset role;
 set role anon;
@@ -237,7 +271,7 @@ select public.return_loan(:'pickup_loan');
 select public.test_denied(format('select public.cancel_reservation(%L)',:'hold2'),'not active');
 -- Last-admin and unauthenticated/missing-profile guards.
 select public.change_member_role('00000000-0000-0000-0000-000000000002','librarian');
-select public.test_denied($q$select public.change_member_role(auth.uid(),'member')$q$,'last administrator');
+select public.test_denied($q$select public.change_member_role(auth.uid(),'member')$q$,'last active administrator');
 select public.change_member_role('00000000-0000-0000-0000-000000000002','administrator');
 set request.jwt.claim.sub='99999999-0000-0000-0000-000000000001';
 select public.test_denied($q$select public.reserve_book('20000000-0000-0000-0000-000000000002')$q$,'Only authenticated');
@@ -248,7 +282,7 @@ select public.issue_school_id_invitation('STU-123','Verified Student') as invite
 reset role;
 select public.test_denied($q$insert into auth.users(id,raw_user_meta_data) values(gen_random_uuid(),'{"school_id":"STU-123"}')$q$,'staff invitation');
 select public.register_library_member('Verified Student','CARD-STU-123','STU-123','student') as linked_member \gset
-insert into auth.users(id,raw_app_meta_data) values('00000000-0000-0000-0000-000000000020',jsonb_build_object('school_id','STU-123','school_invitation',:'invite'));
+insert into auth.users(id,email,email_confirmed_at,raw_app_meta_data) values('00000000-0000-0000-0000-000000000020','verified.student@example.edu',now(),jsonb_build_object('school_id','STU-123','school_invitation',:'invite'));
 select public.test_assert((select school_id='STU-123' and full_name='Verified Student' from public.profiles where id='00000000-0000-0000-0000-000000000020'),'Verified identity');
 select public.test_assert((select auth_user_id='00000000-0000-0000-0000-000000000020' from public.library_members where id=:'linked_member'),'optional account links to its verified member record');
 select public.test_denied(format('insert into auth.users(id,raw_app_meta_data) values(gen_random_uuid(),%L)',jsonb_build_object('school_id','STU-123','school_invitation',:'invite')),'Valid staff invitation');
@@ -326,6 +360,7 @@ select public.test_assert((select count(*)=4 from public.audit_logs where entity
 -- A stock audit reports discrepancies but never changes circulation status.
 reset role;
 update public.book_copies set location='Shelf A' where barcode in ('TEST-1','TEST-2','TEST-6');
+update public.book_copies set location='Shelf B' where barcode='TEST-8';
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
 select public.start_inventory_audit() as stock_audit \gset
@@ -353,6 +388,18 @@ select public.test_assert((select status='completed' and summary->>'wrong_locati
 select public.test_assert((select status='available' from public.book_copies where barcode='TEST-5'),'inventory audit does not automatically change a missing copy status');
 select public.test_assert((select status='damaged' from public.book_copies where barcode='TEST-2'),'inventory audit does not change a damaged copy status');
 select public.test_denied(format('select public.complete_inventory_audit(%L)',:'stock_audit'),'not open');
+
+-- Shelf audits only count unscanned copies assigned to that shelf. Their
+-- complete snapshot still lets a scan from another shelf be flagged.
+select public.test_denied($q$select public.start_inventory_audit_for_shelf('Not a real shelf')$q$,'Choose a valid shelf');
+select public.start_inventory_audit_for_shelf('Shelf A') as shelf_stock_audit \gset
+select public.test_assert((select location_scope='Shelf A' from public.inventory_audits where id=:'shelf_stock_audit'),'shelf audit stores its selected location');
+select public.test_assert((select count(*)=3 from public.inventory_audit_items where audit_id=:'shelf_stock_audit' and expected_status is not null and expected_location='Shelf A'),'shelf audit snapshots the full inventory but counts expected copies on the selected shelf');
+select public.scan_inventory_audit_copy(:'shelf_stock_audit','TEST-1','Shelf A');
+select public.scan_inventory_audit_copy(:'shelf_stock_audit','TEST-8','Shelf A');
+select public.test_assert((select result='wrong_location' from public.inventory_audit_items where audit_id=:'shelf_stock_audit' and barcode='TEST-8'),'shelf audit flags a copy scanned outside its assigned shelf');
+select public.complete_inventory_audit(:'shelf_stock_audit');
+select public.test_assert((select status='completed' and summary->>'expected_copies'='3' and summary->>'found'='1' and summary->>'wrong_location'='1' and summary->>'not_found'='2' from public.inventory_audits where id=:'shelf_stock_audit'),'shelf audit summary only marks unscanned copies from the selected shelf missing');
 reset role;
 
 -- Walk-in reservations keep borrower details without requiring a member row or

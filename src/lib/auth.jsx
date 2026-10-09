@@ -1,9 +1,24 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { createClient } from '@supabase/supabase-js'
 import { hasSupabaseConfig, supabase } from './supabase'
 
 const AuthContext = createContext(null)
 export const AUTH_REQUEST_TIMEOUT_MS = 8000
+export const PASSWORD_MIN_LENGTH = 8
+export const PASSWORD_MAX_LENGTH = 12
+
+export function isValidNewPassword(password) {
+  return typeof password === 'string'
+    && password.length >= PASSWORD_MIN_LENGTH
+    && password.length <= PASSWORD_MAX_LENGTH
+}
+
 const EMAIL_IDENTIFIER_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const recoveryClient = hasSupabaseConfig
+  ? createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  })
+  : null
 
 export function detectAuthIdentifierType(identifier) {
   return EMAIL_IDENTIFIER_PATTERN.test(String(identifier ?? '').trim()) ? 'email' : 'school_id'
@@ -39,6 +54,36 @@ function logAuthFailure(action, authError) {
     details: authError.details,
     hint: authError.hint,
   })
+}
+
+async function invokeRegistrationLifecycle(action, email, schoolId = '', extra = {}) {
+  if (!supabase) return { error: new Error('Supabase is not configured.') }
+  try {
+    const normalizedSchoolId = String(schoolId ?? '').trim().toUpperCase().replace(/\s+/g, '')
+    const result = await withAuthTimeout(
+      supabase.functions.invoke('registration-lifecycle', {
+        body: { action, email: email.trim().toLowerCase(), schoolId: normalizedSchoolId, ...extra },
+      }),
+      'Registration status request',
+    )
+    let message = result.data?.error?.message
+    if (!message && result.error) {
+      try {
+        const response = result.error.context instanceof Response ? result.error.context.clone() : null
+        const errorBody = response ? await response.json() : null
+        message = errorBody?.error?.message
+      } catch { /* Keep the SDK's message if the response is not JSON. */ }
+    }
+    if (result.error || result.data?.ok === false) {
+      const lifecycleError = new Error(message || result.error?.message || 'Registration services could not complete the request.')
+      lifecycleError.code = result.data?.error?.code || result.error?.code
+      lifecycleError.status = result.error?.status
+      return { data: result.data, error: lifecycleError }
+    }
+    return { data: result.data }
+  } catch (requestError) {
+    return { error: requestError }
+  }
 }
 
 async function authenticateWithSchoolId(action, schoolId, password, setError, invitation = '') {
@@ -230,7 +275,32 @@ export function AuthProvider({ children }) {
       createMemberAccount: async ({ fullName, email, schoolId, password }) => {
         if (!supabase) return { error: new Error('Supabase is not configured.') }
         setError('')
+        if (!isValidNewPassword(password)) {
+          const passwordError = new Error('Password must be 8–12 characters.')
+          setError(passwordError.message)
+          return { error: passwordError }
+        }
         try {
+          // Check for an existing email registration and safely clear only an
+          // expired account. The Edge Function never trusts a client actor ID.
+          const prepared = await invokeRegistrationLifecycle('prepare', email, schoolId)
+          if (prepared.error) {
+            setError(prepared.error.message)
+            return prepared
+          }
+          if (prepared.data?.status === 'pending_email_verification' || prepared.data?.status === 'assistance_pending') {
+            return { data: { existingPending: true, status: prepared.data.status, expiresAt: prepared.data.expires_at } }
+          }
+          if (prepared.data?.status === 'verified') {
+            const verifiedError = new Error('This account is already verified. Sign in using its email address.')
+            setError(verifiedError.message)
+            return { error: verifiedError }
+          }
+          if (prepared.data?.status === 'expired_protected') {
+            const preservedError = new Error('This expired account is linked to library records and was preserved. Contact library staff for help.')
+            setError(preservedError.message)
+            return { error: preservedError }
+          }
           const result = await withAuthTimeout(
             supabase.auth.signUp({
               email: email.trim().toLowerCase(),
@@ -239,36 +309,73 @@ export function AuthProvider({ children }) {
                 emailRedirectTo: window.location.origin,
                 data: {
                   full_name: fullName.trim(),
-                  // This is an unverified claim, not an authorization field.
-                  // The database links it only after email and card/PIN checks.
-                  registration_school_id: schoolId.trim().toUpperCase().replace(/\s+/g, ''),
+                  registration_school_id: String(schoolId ?? '').trim().toUpperCase().replace(/\s+/g, ''),
                 },
               },
             }),
             'Account registration',
           )
           if (result.error) {
+            // A second tab may have created this same registration between
+            // preflight and signup. Recover its pending verification state instead of
+            // presenting Supabase's generic duplicate-account response.
+            const latestStatus = await invokeRegistrationLifecycle('status', email, schoolId)
+            if (!latestStatus.error && ['pending_email_verification', 'assistance_pending'].includes(latestStatus.data?.status)) {
+              return { data: { existingPending: true, status: latestStatus.data.status, expiresAt: latestStatus.data.expires_at } }
+            }
             logAuthFailure('account registration', result.error)
             setError(result.error.message)
+            return result
           }
-          return result
+          const status = await invokeRegistrationLifecycle('status', email, schoolId)
+          return {
+            ...result,
+            data: {
+              ...result.data,
+              registrationStatus: status.error ? null : status.data,
+              registrationDeadline: status.error ? null : status.data?.expires_at,
+            },
+          }
         } catch (authError) {
           logAuthFailure('account registration', authError)
           setError(authError.message)
           return { error: authError }
         }
       },
-      completeMemberAccountRegistration: async (schoolId, cardNumber, pin) => {
+      getRegistrationStatus: async (email, schoolId) => invokeRegistrationLifecycle('status', email, schoolId),
+      resendRegistrationEmail: async (email, schoolId) => invokeRegistrationLifecycle('resend', email, schoolId),
+      requestPasswordResetOtp: async (email) => {
         if (!supabase) return { error: new Error('Supabase is not configured.') }
         try {
           return await withAuthTimeout(
-            supabase.rpc('complete_member_account_registration', {
-              p_school_id: schoolId,
-              p_card_number: cardNumber,
-              p_pin: pin,
-            }),
-            'Library account verification',
+            supabase.auth.resetPasswordForEmail(email.trim().toLowerCase()),
+            'Password recovery email',
           )
+        } catch (authError) {
+          return { error: authError }
+        }
+      },
+      completePasswordReset: async (email, token, password) => {
+        if (!recoveryClient) return { error: new Error('Supabase is not configured.') }
+        if (!isValidNewPassword(password)) return { error: new Error('Password must be 8–12 characters.') }
+        const normalizedToken = String(token ?? '').trim()
+        if (!/^\d{6}$/.test(normalizedToken)) return { error: new Error('Enter the six-digit code from your email.') }
+        try {
+          const verification = await withAuthTimeout(
+            recoveryClient.auth.verifyOtp({ email: email.trim().toLowerCase(), token: normalizedToken, type: 'recovery' }),
+            'Recovery code verification',
+          )
+          if (verification.error) return verification
+          if (!verification.data?.session) return { error: new Error('The code was not accepted. Request a new code and try again.') }
+          const update = await withAuthTimeout(
+            recoveryClient.auth.updateUser({ password }),
+            'Password update',
+          )
+          if (update.error) return update
+          const { error: auditError } = await recoveryClient.rpc('record_password_changed')
+          if (auditError && import.meta.env.DEV) console.error('[activity] password change recording failed', auditError.code ?? 'unknown')
+          await recoveryClient.auth.signOut({ scope: 'local' })
+          return update
         } catch (authError) {
           return { error: authError }
         }

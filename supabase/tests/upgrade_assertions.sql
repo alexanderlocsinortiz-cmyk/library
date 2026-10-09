@@ -11,9 +11,13 @@ begin
   if to_regprocedure('public.record_book_request(text,text,text,uuid)') is null
      or to_regprocedure('public.update_book_request(uuid,text,text)') is null
      or to_regprocedure('public.start_inventory_audit()') is null
+     or to_regprocedure('public.start_inventory_audit_for_shelf(text)') is null
      or to_regprocedure('public.scan_inventory_audit_copy(uuid,text,text)') is null
      or to_regprocedure('public.complete_inventory_audit(uuid)') is null then
     raise exception 'Interview request and inventory audit operations were not installed';
+  end if;
+  if not exists(select 1 from information_schema.columns where table_schema='public' and table_name='inventory_audits' and column_name='location_scope') then
+    raise exception 'Shelf-scoped inventory audit support was not installed';
   end if;
   if (select value from public.system_settings where key='loan_period_days') <> '3'::jsonb then
     raise exception 'Loan period was not migrated to the interview policy';

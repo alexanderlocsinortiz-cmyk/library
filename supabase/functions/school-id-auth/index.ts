@@ -27,6 +27,13 @@ function maskSchoolId(value: string) {
   return `${normalized.slice(0, 2)}***${normalized.slice(-2)}`
 }
 
+function isCredentialRejection(error: { status?: number; code?: string } | null | undefined) {
+  return Boolean(error && (
+    [400, 401, 422].includes(error.status ?? 0)
+    || ['invalid_credentials', 'email_not_confirmed'].includes(error.code ?? '')
+  ))
+}
+
 const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
 const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
 const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -57,8 +64,8 @@ Deno.serve(async (request) => {
     if (action === 'sign-in' && (password.length < 6 || password.length > 128)) {
       return json({ ok: false, error: { message: 'Invalid email, School ID, or password.' } })
     }
-    if (action === 'recover' && (password.length < 12 || password.length > 128)) {
-      return json({ ok: false, error: { message: 'New passwords must contain 12–128 characters.' } })
+    if (action === 'recover' && (password.length < 8 || password.length > 12)) {
+      return json({ ok: false, error: { message: 'New passwords must contain 8–12 characters.' } })
     }
     const admin = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
@@ -124,7 +131,11 @@ Deno.serve(async (request) => {
       signInEmail = userResult.user.email
     } else {
       const { data: resolvedEmail, error: resolveError } = await admin.rpc('school_login_email', { p_school_id: schoolId })
-      if (resolveError || typeof resolvedEmail !== 'string' || !resolvedEmail) {
+      if (resolveError) {
+        console.error('[school-id-auth] account lookup failed', resolveError.code ?? 'unknown')
+        return json({ ok: false, error: { message: 'School ID authentication could not be completed.' } }, 503)
+      }
+      if (typeof resolvedEmail !== 'string' || !resolvedEmail) {
         await recordActivity('failed_login')
         return json({ ok: false, error: { message: 'Invalid email, School ID, or password.' } })
       }
@@ -136,9 +147,20 @@ Deno.serve(async (request) => {
       password,
     })
 
-    if (signInError || !data.session) {
-      await recordActivity('failed_login')
-      return json({ ok: false, error: { message: 'Invalid email, School ID, or password.' } })
+    if (signInError) {
+      if (signInError.status === 429) {
+        return json({ ok: false, error: { message: 'Too many sign-in attempts. Try again in 15 minutes.' } }, 429)
+      }
+      if (isCredentialRejection(signInError)) {
+        await recordActivity('failed_login')
+        return json({ ok: false, error: { message: 'Invalid email, School ID, or password.' } })
+      }
+      console.error('[school-id-auth] password verification service failed', signInError.status ?? 'unknown', signInError.code ?? 'unknown')
+      return json({ ok: false, error: { message: 'School ID authentication could not be completed.' } }, 503)
+    }
+    if (!data.session) {
+      console.error('[school-id-auth] password verification returned no session')
+      return json({ ok: false, error: { message: 'School ID authentication could not be completed.' } }, 503)
     }
 
     await recordActivity('login_success', data.user.id)

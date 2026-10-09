@@ -4,6 +4,22 @@ enable_signup = true
 [auth.email]
 enable_signup = true
 enable_confirmations = true
+otp_length = 6
+otp_expiry = 3600
+max_frequency = "60s"
+# Password recovery codes remain valid for 60 minutes; the independent member
+# registration completion deadline is stored in public.system_settings.
+
+[auth.email.template.confirmation]
+subject = "Verify your IBA College Library email"
+content_path = "./supabase/templates/confirmation.html"
+
+[auth.email.template.recovery]
+subject = "Your IBA College Library password reset code"
+content_path = "./supabase/templates/recovery.html"
+
+[auth.rate_limit]
+token_verifications = 10
 
 [db.seed]
 enabled = true
@@ -18,3 +34,13 @@ verify_jwt = false
 [functions.email-auth]
 # Email sign-in is performed before the browser has a user session JWT.
 verify_jwt = false
+
+[functions.registration-lifecycle]
+# Status/resend/cancel requests use server-side rate limits. Cancellation also
+# verifies the password. Scheduled cleanup requires REGISTRATION_CLEANUP_SECRET.
+verify_jwt = false
+
+[functions.admin-delete-user]
+# Deletes only accounts after a fresh administrator check and a database
+# preflight. Circulation history and append-only activity records are retained.
+verify_jwt = true

@@ -3,6 +3,8 @@ import { usePagination } from './Pagination'
 import { ConfirmDialog } from './ConfirmDialog'
 import { fetchAllRows } from '../lib/paging'
 import { supabase } from '../lib/supabase'
+import { SHELF_LOCATIONS } from '../lib/shelf-locations'
+import { CameraBarcodeScanner } from './CameraBarcodeScanner'
 
 const requestStatuses = ['new', 'reviewing', 'ordered', 'acquired', 'declined']
 const requestTransitions = {
@@ -164,23 +166,37 @@ export function StaffInventoryAudit() {
   const [items, setItems] = useState([])
   const [latestAudit, setLatestAudit] = useState(null)
   const [barcode, setBarcode] = useState('')
-  const [location, setLocation] = useState('')
+  const [selectedShelf, setSelectedShelf] = useState('')
+  const [shelfOptions, setShelfOptions] = useState(SHELF_LOCATIONS)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [showComplete, setShowComplete] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
 
-  const load = async () => {
+  const load = async ({ silent = false } = {}) => {
     if (!supabase) { setLoading(false); return }
-    setLoading(true)
+    if (!silent) setLoading(true)
     setError('')
     try {
+      if (!silent) {
+        const { data: copyLocations, error: locationsError } = await fetchAllRows(() => supabase.from('book_copies')
+          .select('id, location').not('location', 'is', null))
+        if (locationsError) throw locationsError
+        const availableShelves = [...new Set([
+          ...SHELF_LOCATIONS,
+          ...(copyLocations || []).map((copy) => copy.location?.trim()).filter(Boolean),
+        ])].sort((left, right) => left.localeCompare(right))
+        setShelfOptions(availableShelves)
+        setSelectedShelf((current) => current || availableShelves[0] || '')
+      }
+
       const { data: activeAudit, error: auditError } = await supabase.from('inventory_audits')
-        .select('id, status, started_at')
+        .select('id, status, started_at, location_scope')
         .eq('status', 'in_progress').maybeSingle()
       if (auditError) throw auditError
       setAudit(activeAudit)
+      if (activeAudit?.location_scope) setSelectedShelf(activeAudit.location_scope)
       if (activeAudit) {
         const { data, error: itemsError } = await fetchAllRows(() => supabase.from('inventory_audit_items')
           .select('id, barcode, title_snapshot, expected_status, expected_location, observed_location, result, scanned_at')
@@ -191,7 +207,7 @@ export function StaffInventoryAudit() {
       } else {
         setItems([])
         const { data: completed, error: completedError } = await supabase.from('inventory_audits')
-          .select('id, started_at, completed_at, summary').eq('status', 'completed')
+          .select('id, started_at, completed_at, summary, location_scope').eq('status', 'completed')
           .order('completed_at', { ascending: false }).limit(1).maybeSingle()
         if (completedError) throw completedError
         setLatestAudit(completed)
@@ -200,7 +216,7 @@ export function StaffInventoryAudit() {
       if (import.meta.env.DEV) console.error('[inventory audit] load failed', loadError)
       setError('Unable to load inventory audit. Check the database migration and try again.')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -212,9 +228,10 @@ export function StaffInventoryAudit() {
     setError('')
     setMessage('')
     try {
-      const { error: startError } = await supabase.rpc('start_inventory_audit')
+      if (!selectedShelf) throw new Error('Choose a shelf before starting the audit.')
+      const { error: startError } = await supabase.rpc('start_inventory_audit_for_shelf', { p_location: selectedShelf })
       if (startError) throw startError
-      setMessage('Audit started. Scan copies expected to be on library shelves.')
+      setMessage(`Audit started for ${selectedShelf}. Scan each copy on this shelf; scans are saved as you enter them.`)
       await load()
       document.getElementById('inventory-audit-barcode')?.focus()
     } catch (startError) {
@@ -235,12 +252,12 @@ export function StaffInventoryAudit() {
       const { data, error: scanError } = await supabase.rpc('scan_inventory_audit_copy', {
         p_audit_id: audit.id,
         p_barcode: barcode,
-        p_observed_location: location,
+        p_observed_location: audit.location_scope || selectedShelf,
       })
       if (scanError) throw scanError
       setBarcode('')
       setMessage(auditResultLabels[data] || ('Scan recorded: ' + statusLabel(data) + '.'))
-      await load()
+      await load({ silent: true })
       document.getElementById('inventory-audit-barcode')?.focus()
     } catch (scanError) {
       if (import.meta.env.DEV) console.error('[inventory audit] scan failed', scanError)
@@ -269,44 +286,53 @@ export function StaffInventoryAudit() {
     }
   }
 
-  const { pageItems, pagination } = usePagination(items, (audit?.id || '') + ':' + items.length)
-  const expectedCount = items.filter((item) => item.expected_status).length
-  const scannedCount = items.filter((item) => item.scanned_at).length
+  const scopedItems = audit?.location_scope
+    ? items.filter((item) => item.expected_location?.trim() === audit.location_scope || item.scanned_at)
+    : items
+  const { pageItems, pagination } = usePagination(scopedItems, (audit?.id || '') + ':' + scopedItems.length)
+  const expectedItems = audit?.location_scope
+    ? items.filter((item) => item.expected_status && item.expected_location?.trim() === audit.location_scope)
+    : items.filter((item) => item.expected_status)
+  const expectedCount = expectedItems.length
+  const scannedCount = expectedItems.filter((item) => item.scanned_at).length
 
   return <section className="content-section">
     <PageHeader eyebrow="Physical inventory" title="Stock audit" description="Compare scanned shelf copies with the catalog. A discrepancy is a review flag; the audit never marks a book lost automatically." />
     {(error || message) && <div className={error ? 'inline-error' : 'inline-success'} role={error ? 'alert' : 'status'}>{error || message}</div>}
     {loading ? <div className="empty-state loading-state">Loading stock audit...</div> : audit ? <>
-      <div className="section-heading"><div><h3>Audit in progress</h3><p className="muted">Started {formattedDate(audit.started_at)} · {scannedCount} of {expectedCount} expected copies scanned.</p></div><button type="button" className="primary-button" onClick={() => setShowComplete(true)} disabled={busy}>Finish audit</button></div>
+      <div className="section-heading"><div><h3>Audit in progress</h3><p className="muted">{audit.location_scope ? `Shelf: ${audit.location_scope} · ` : 'All shelves · '}Started {formattedDate(audit.started_at)} · {scannedCount} of {expectedCount} expected copies scanned.</p></div><button type="button" className="primary-button" onClick={() => setShowComplete(true)} disabled={busy}>Finish audit</button></div>
       <div className="audit-progress" aria-label="Stock audit progress">
         <div><strong>Audit progress</strong><span>{expectedCount ? Math.round((scannedCount / expectedCount) * 100) : 0}%</span></div>
         <progress value={scannedCount} max={Math.max(expectedCount, 1)} aria-label={`${scannedCount} of ${expectedCount} expected copies scanned`} />
         <small>{scannedCount} scanned of {expectedCount} expected shelf copies</small>
       </div>
       <form className="tool-form" onSubmit={scanCopy}>
-        <h3>Scan a physical copy</h3>
-        <div className="form-row">
-          <label>Copy barcode<input id="inventory-audit-barcode" value={barcode} onChange={(event) => setBarcode(event.target.value)} maxLength={100} required autoComplete="off" placeholder="Scan barcode, then press Enter" /></label>
-          <label>Observed shelf / location<input value={location} onChange={(event) => setLocation(event.target.value)} maxLength={100} required placeholder="e.g. Shelf B-2" /></label>
-        </div>
-        <button className="primary-button" disabled={busy}>{busy ? 'Saving...' : 'Record scan'}</button>
+        <h3>Scan copies on this shelf</h3>
+        {audit.location_scope
+          ? <p className="muted">Keep scanning copies from <strong>{audit.location_scope}</strong>. Most barcode scanners send Enter, which saves each scan automatically.</p>
+          : <label>Shelf being checked<select value={selectedShelf} onChange={(event) => setSelectedShelf(event.target.value)} required><option value="">Select a shelf</option>{shelfOptions.map((shelf) => <option key={shelf} value={shelf}>{shelf}</option>)}</select></label>}
+        <div className="barcode-entry"><label htmlFor="inventory-audit-barcode">Copy barcode</label><div className="barcode-entry-controls"><input id="inventory-audit-barcode" value={barcode} onChange={(event) => setBarcode(event.target.value)} maxLength={100} required autoComplete="off" disabled={busy} placeholder="Scan barcode; scanner Enter saves it" /><CameraBarcodeScanner onScan={setBarcode} /></div></div>
+        <button className="primary-button" disabled={busy || !barcode.trim()}>{busy ? 'Saving scan...' : 'Record scan'}</button>
       </form>
-      {items.length === 0 ? <div className="empty-state">No copies were on shelves when this audit started. Scanned barcodes will still be checked for unexpected records.</div> : <div className="table-wrap">
+      {scopedItems.length === 0 ? <div className="empty-state">No copies are assigned to this shelf in the audit snapshot. Scanned barcodes will still be checked against the catalog.</div> : <div className="table-wrap">
         <table><thead><tr><th>Book / barcode</th><th>Expected location</th><th>Observed location</th><th>Expected status</th><th>Audit result</th></tr></thead>
           <tbody>{pageItems.map((item) => <tr key={item.id}><td><strong>{item.title_snapshot || 'Unknown copy'}</strong><small className="table-subtext">{item.barcode}</small></td><td>{item.expected_location || 'Not recorded'}</td><td>{item.observed_location || '—'}</td><td>{item.expected_status || 'Not in snapshot'}</td><td><span className="table-status" data-status={item.result}>{auditResultLabels[item.result] || statusLabel(item.result)}</span></td></tr>)}</tbody>
         </table>
       </div>}
       {pagination}
     </> : <>
-      {latestAudit && <div className="section-heading"><div><h3>Latest completed audit</h3><p className="muted">Completed {formattedDate(latestAudit.completed_at)}. Unscanned copies were flagged for physical verification; copy records were not automatically changed.</p></div></div>}
+      {latestAudit && <div className="section-heading"><div><h3>Latest completed audit</h3><p className="muted">Completed {formattedDate(latestAudit.completed_at)}{latestAudit.location_scope ? ` · Shelf: ${latestAudit.location_scope}` : ''}. Unscanned copies were flagged for physical verification; copy records were not automatically changed.</p></div></div>}
       {latestAudit && <div className="form-row">
         {Object.entries(latestAudit.summary || {}).map(([label, count]) => <div className="stat-card" key={label}><span>{statusLabel(label)}</span><strong>{count}</strong></div>)}
       </div>}
       <div className="tool-form">
-        <h3>Start a stock audit</h3>
-        <p className="muted">The audit snapshots copies marked available, reserved, maintenance, or damaged. Borrowed and overdue copies are excluded. Only one audit can be open at a time.</p>
+        <h3>Check a shelf</h3>
+        <p className="muted">Choose one shelf, then scan each copy there. The audit tracks missing and misplaced copies for that shelf. Borrowed and overdue copies are excluded.</p>
         <p className="requirement-note">When finished, unscanned copies are flagged for checking. They are never automatically marked lost or otherwise changed.</p>
-        <button type="button" className="primary-button" onClick={() => void startAudit()} disabled={busy}>{busy ? 'Starting...' : 'Start audit'}</button>
+        <div className="form-row">
+          <label>Shelf to audit<select value={selectedShelf} onChange={(event) => setSelectedShelf(event.target.value)} required><option value="">Select a shelf</option>{shelfOptions.map((shelf) => <option key={shelf} value={shelf}>{shelf}</option>)}</select></label>
+          <div className="form-actions"><button type="button" className="primary-button" onClick={() => void startAudit()} disabled={busy || !selectedShelf}>{busy ? 'Starting...' : 'Start shelf audit'}</button></div>
+        </div>
       </div>
     </>}
     <ConfirmDialog open={showComplete} title="Finish this stock audit?" description="Unscanned shelf copies will be flagged for physical verification. Their inventory status will not be changed automatically." confirmLabel="Finish audit" busy={busy} onCancel={() => setShowComplete(false)} onConfirm={() => void finishAudit()} />

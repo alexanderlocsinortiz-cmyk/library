@@ -24,11 +24,11 @@ select public.test_assert((select count(*) > 0 from public.activity_logs), 'admi
 select public.test_assert((select count(*) > 0 from public.activity_logs where action = 'book_added'), 'book additions are logged by the database');
 select public.test_assert((select count(*) > 0 from public.activity_logs where action = 'member_registered'), 'member registration is logged by the database');
 select public.test_assert((select count(*) > 0 from public.activity_logs where action = 'reservation_created'), 'reservation creation is logged by the database');
-select public.test_assert((select actor_name_snapshot = 'Walk-in Student' and actor_role_snapshot = 'member'
+select public.test_assert((select actor_name_snapshot = 'User 1' and actor_role_snapshot = 'administrator'
   from public.activity_logs
   where action = 'reservation_created'
     and entity_id = (select id from public.reservations where book_id = '20000000-0000-0000-0000-000000000006' and member_id = (select id from public.library_members where library_card_number = 'CARD-WALKIN-1') order by created_at desc limit 1)),
-  'card-and-PIN reservations snapshot the validated member as actor');
+  'staff-created reservations snapshot the authenticated staff member as actor');
 select public.test_assert((select count(*) > 0 from public.activity_logs where action = 'reservation_cancelled'), 'reservation cancellation is logged by the database');
 select public.test_assert((select count(*) > 0 from public.activity_logs where action = 'reservation_completed'), 'reservation completion is logged by the database');
 select public.test_assert((select count(*) > 0 from public.activity_logs where action = 'reservation_expired'), 'reservation expiry is logged by the database');
@@ -41,9 +41,11 @@ select public.test_assert((select count(*) > 0 from public.activity_logs where a
 select public.test_assert((select count(*) > 0 from public.activity_logs where action = 'copy_added'), 'physical copy additions are logged by the database');
 select public.test_assert(not exists (
   select 1 from public.activity_logs a
-  where coalesce(a.old_values::text, '') ~* '(password|token|secret|pin)'
-    or coalesce(a.new_values::text, '') ~* '(password|token|secret|pin)'
-), 'stored value snapshots do not expose password or PIN values');
+  where coalesce(a.old_values::text, '') ~* '"(password|password_hash|token|access_token|refresh_token|secret|pin|otp)"[[:space:]]*:'
+     or coalesce(a.new_values::text, '') ~* '"(password|password_hash|token|access_token|refresh_token|secret|pin|otp)"[[:space:]]*:'
+     or coalesce(a.old_values::text, '') ~ '(24681357|12345678|87654321)'
+     or coalesce(a.new_values::text, '') ~ '(24681357|12345678|87654321)'
+), 'stored snapshots omit credential fields and fixture password/PIN values');
 select public.test_assert((public.admin_activity_logs())->>'total' is not null, 'administrator API returns paginated records');
 select public.test_assert(jsonb_array_length((public.admin_activity_logs())->'records') <= 10, 'administrator API limits pages to ten rows');
 select public.test_denied('update public.activity_logs set description = ''tampered''', 'permission denied');

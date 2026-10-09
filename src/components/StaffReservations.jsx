@@ -165,12 +165,12 @@ export function StaffReservations({ onBack }) {
       if (refreshError) throw refreshError
       const [reservationsResult, membersResult, booksResult] = await Promise.all([
         fetchAllRows(() => supabase.from('reservations')
-          .select('id, book_id, member_id, borrower_type, borrower_full_name, student_employee_id, contact_number, email_address, reservation_date, expected_pickup_date, status, notes, created_by, created_at, updated_at, pickup_expires_at, copy_id, book_copies(barcode), books(title, author), member:library_members!reservations_member_id_fkey(full_name, library_card_number)')
+          .select('id, book_id, member_id, borrower_type, borrower_full_name, student_employee_id, contact_number, email_address, reservation_date, expected_pickup_date, status, notes, created_by, created_at, updated_at, pickup_expires_at, copy_id, book_copies(barcode), books(title, author), member:library_members!reservations_member_id_fkey(full_name, library_card_number, email_only)')
           .order('created_at', { ascending: true })),
         fetchAllRows(() => supabase.from('library_members')
           .select('id, full_name, library_card_number, school_id, member_type')
           .eq('is_active', true)
-          .not('library_card_number', 'is', null)
+          .eq('email_only', false)
           .order('full_name')),
         fetchAllRows(() => supabase.from('books')
           .select('id, title, author, isbn, course_subject, book_copies(id, status)')
@@ -435,7 +435,7 @@ export function StaffReservations({ onBack }) {
       <fieldset className="walkin-form-section"><legend>Book Information</legend><div className="walkin-form-grid book-information-grid">
         <ReservationBookPicker books={books} selectedBookId={draft.book_id} onSelect={(bookId) => setDraft((current) => ({ ...current, book_id: bookId }))} resetKey={bookPickerResetKey} />
         <label>Available Copies<input type="number" value={selectedBook ? selectedBook.available_copies : ''} readOnly placeholder="Select a book" aria-label="Available copies" /></label>
-        <label>Reservation Date <span className="required-field-mark" aria-hidden="true">*</span><input type="date" value={draft.reservation_date} max={todayValue()} onChange={(event) => setDraft((current) => ({ ...current, reservation_date: event.target.value }))} required aria-label="Reservation date" /></label>
+        <label><span>Reservation Date <span className="required-field-mark" aria-hidden="true">*</span></span><input type="date" value={draft.reservation_date} max={todayValue()} onChange={(event) => setDraft((current) => ({ ...current, reservation_date: event.target.value }))} required aria-label="Reservation date" /></label>
         <label>Expected Pickup Date <span className="optional-field-mark">Optional</span><input type="date" value={draft.expected_pickup_date} min={draft.reservation_date} onChange={(event) => setDraft((current) => ({ ...current, expected_pickup_date: event.target.value }))} aria-label="Expected pickup date" /></label>
         <label className="walkin-notes-field">Notes <span className="optional-field-mark">Optional</span><textarea value={draft.notes} onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))} maxLength={2000} rows={2} aria-label="Reservation notes" /></label>
       </div></fieldset>
@@ -464,7 +464,7 @@ export function StaffReservations({ onBack }) {
           const firstInQueue = queueHeadByBook.get(reservation.book_id) === reservation.id
           const reservationBook = books.find((book) => book.id === reservation.book_id)
           return <tr key={reservation.id}>
-            <td><strong>{borrowerName}</strong><small className="table-subtext">{reservation.student_employee_id || reservation.contact_number || reservation.email_address || ''}</small></td>
+            <td><strong>{borrowerName}</strong><small className="table-subtext">{reservation.member?.email_only ? `Confirmed email: ${reservation.email_address || 'not recorded'}; student status not verified` : reservation.student_employee_id || reservation.contact_number || reservation.email_address || ''}</small></td>
             <td><span className="reservation-borrower-type">{borrowerTypes.find((type) => type.value === reservation.borrower_type)?.label || 'Visitor'}</span></td>
             <td><strong>{reservation.books?.title || 'Unknown book'}</strong><small className="table-subtext">{reservation.books?.author || ''}</small>{reservation.book_copies?.barcode && <small className="table-subtext">Copy {reservation.book_copies.barcode}</small>}{reservation.member_id && <small className="table-subtext">Registered library member</small>}</td>
             <td>{formatReservationDate(reservation.reservation_date || reservation.created_at)}</td>
@@ -474,7 +474,7 @@ export function StaffReservations({ onBack }) {
               <button type="button" className="reservation-row-action" aria-label={'View details for ' + borrowerName} onClick={() => openReservation(reservation, 'view')}>View Details</button>
               {['waiting', 'ready_for_pickup'].includes(reservation.status) && <button type="button" className="reservation-row-action" aria-label={'Edit reservation for ' + borrowerName} onClick={() => openReservation(reservation, 'edit')}>Edit</button>}
               {reservation.status === 'waiting' && firstInQueue && <button type="button" className="reservation-row-action" onClick={() => setPendingAction({ reservation, action: 'ready' })} disabled={!reservationBook || reservationBook.available_copies === 0}>Mark Ready for Pickup</button>}
-              {reservation.status === 'ready_for_pickup' && <button type="button" className="reservation-row-action" onClick={() => setPendingAction({ reservation, action: 'complete' })} disabled={!reservation.member_id || !reservation.member?.library_card_number || !reservation.copy_id} title={!reservation.member_id ? 'Link this walk-in to an active member with a verified library card before checkout.' : !reservation.member?.library_card_number ? 'A verified library card is required before checkout.' : undefined}>Complete Reservation</button>}
+              {reservation.status === 'ready_for_pickup' && <button type="button" className="reservation-row-action" onClick={() => setPendingAction({ reservation, action: 'complete' })} disabled={!reservation.member_id || !reservation.copy_id} title={!reservation.member_id ? 'Link this reservation to an active library account before checkout.' : undefined}>Complete Reservation</button>}
               {['waiting', 'ready_for_pickup'].includes(reservation.status) && <button type="button" className="reservation-row-action danger" onClick={() => setPendingAction({ reservation, action: 'cancel' })}>Cancel Reservation</button>}
             </div></td>
           </tr>

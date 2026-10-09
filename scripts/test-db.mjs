@@ -31,9 +31,17 @@ try {
   started = true
   sql('create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;')
   const bootstrap = `    create schema auth;
-    create table auth.users(id uuid primary key, email text unique, email_confirmed_at timestamptz, raw_user_meta_data jsonb default '{}', raw_app_meta_data jsonb default '{}');
+    create schema storage;
+    create table auth.users(id uuid primary key, email text unique, email_confirmed_at timestamptz, last_sign_in_at timestamptz, banned_until timestamptz, created_at timestamptz not null default now(), raw_user_meta_data jsonb default '{}', raw_app_meta_data jsonb default '{}');
     create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
     create function auth.role() returns text language sql stable as $$select nullif(current_setting('request.jwt.claim.role',true),'')$$;
+    create table storage.buckets(id text primary key, name text not null, public boolean not null default false, file_size_limit bigint, allowed_mime_types text[]);
+    create table storage.objects(id uuid primary key default gen_random_uuid(), bucket_id text not null references storage.buckets(id), name text not null, unique(bucket_id,name));
+    create function storage.foldername(object_name text) returns text[] language sql immutable strict as $$select case when array_length(string_to_array(object_name,'/'),1)>1 then (string_to_array(object_name,'/'))[1:array_length(string_to_array(object_name,'/'),1)-1] else array[]::text[] end$$;
+    create function storage.filename(object_name text) returns text language sql immutable strict as $$select regexp_replace(object_name,'^.*/','')$$;
+    alter table storage.objects enable row level security;
+    grant usage on schema storage to anon,authenticated,service_role;
+    grant select,insert,update,delete on storage.objects to anon,authenticated,service_role;
     grant usage on schema public,auth to anon,authenticated,service_role;
     grant execute on all functions in schema auth to anon,authenticated,service_role;
     alter default privileges in schema public grant all on tables to anon,authenticated,service_role;
@@ -41,11 +49,16 @@ try {
     alter default privileges in schema public grant execute on functions to anon,authenticated,service_role;`
   sql(bootstrap)
   for (const migration of readdirSync('supabase/migrations').filter((name) => name.endsWith('.sql')).sort()) {
+    if (migration.startsWith('022_')) file(resolve('supabase/tests/registration_school_id_seed.sql'))
     run('psql', [...conn, '--single-transaction', '-f', resolve('supabase/migrations', migration)])
     console.log(`Installed ${migration}`)
   }
   file(resolve('supabase/tests/integrity.sql'))
+  file(resolve('supabase/tests/book_cover_storage.sql'))
   file(resolve('supabase/tests/activity_logs.sql'))
+  file(resolve('supabase/tests/registration_school_id.sql'))
+  file(resolve('supabase/tests/registration_expiration.sql'))
+  file(resolve('supabase/tests/admin_user_deletion.sql'))
   console.log('Database authorization and workflow assertions passed')
   const staff = `set role authenticated; set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';`
   const promotions = await Promise.all([1,2].map(() => concurrentSql(`${staff} select public.promote_next_reservation('20000000-0000-0000-0000-000000000002');`)))
@@ -66,6 +79,7 @@ try {
   conn[conn.indexOf('-d') + 1] = 'library_upgrade'
   sql(bootstrap)
   for (const migration of readdirSync('supabase/migrations').filter((name) => name.endsWith('.sql')).sort()) {
+    if (migration.startsWith('022_')) file(resolve('supabase/tests/registration_school_id_seed.sql'))
     run('psql', [...conn, '--single-transaction', '-f', resolve('supabase/migrations', migration)])
     if (migration.startsWith('004_')) {
       file(resolve('supabase/tests/upgrade_seed.sql'))

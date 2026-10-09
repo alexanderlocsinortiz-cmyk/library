@@ -3,7 +3,9 @@ import { fetchAllRows } from '../lib/paging'
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { ConfirmDialog } from './ConfirmDialog'
+import { BookCoverArt } from './BookCoverArt'
 import { defaultCirculationPolicy, formatFine, getLoanDueState, normalizeCirculationPolicy } from '../lib/circulation'
+import { getBookCategories } from '../lib/book-categories'
 
 const formatDate = (value) => value ? new Date(value).toLocaleDateString() : 'Not set'
 const CATALOG_PAGE_SIZE = 12
@@ -13,40 +15,55 @@ function describeReservationError(message) {
   if (normalized.includes('not linked') || normalized.includes('verified card')) {
     return 'Your account is not linked to an active library member with a verified library card. Ask library staff to link your account or place the hold at the circulation desk.'
   }
-  if (normalized.includes('currently available')) return 'This title has an available copy. Ask staff to check it out at the circulation desk.'
   if (normalized.includes('no physical copies')) return 'The library has no physical copy of this title yet. Ask staff to record an acquisition request.'
+  if (normalized.includes('no copies of this title are available or circulating')) return 'There are no usable copies to hold right now. Ask library staff for help.'
   return 'Unable to create the reservation. Please try again or ask library staff for help.'
 }
 
-function PageHeader({ eyebrow, title, description }) {
+function markFirstAvailableCopyReserved(copies = []) {
+  let assigned = false
+  return copies.map((copy) => {
+    if (!assigned && copy.status === 'available') {
+      assigned = true
+      return { ...copy, status: 'reserved' }
+    }
+    return copy
+  })
+}
+
+function PageHeader({ eyebrow, title, description, onBack }) {
   return (
-    <div className="section-heading page-header">
-      <div>
+    <header className="book-page-header-card member-page-header">
+      <div className="book-page-header-copy">
         <span className="eyebrow">{eyebrow}</span>
         <h2>{title}</h2>
         <p className="muted">{description}</p>
       </div>
-    </div>
+      {onBack && <button type="button" className="book-page-header-back" onClick={onBack}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /><path d="M20 12H9" /></svg>
+        <span>Back to dashboard</span>
+      </button>}
+    </header>
   )
 }
 
 function BookCover({ book }) {
-  return <div className="book-cover compact-cover">{book?.cover_url ? <img src={book.cover_url} alt={`Cover of ${book.title}`} /> : <span>BOOK</span>}</div>
+  return <BookCoverArt book={book} className="book-cover compact-cover" externalLookup />
+}
+
+function MemberBookThumbnail({ book }) {
+  return <BookCoverArt book={book} className="member-book-thumbnail" externalLookup />
 }
 
 function CatalogBookCover({ book }) {
-  const [imageFailed, setImageFailed] = useState(false)
-  return <span className="catalog-book-cover">
-    {book?.cover_url && !imageFailed
-      ? <img src={book.cover_url} alt={`Cover of ${book.title}`} loading="lazy" decoding="async" onError={() => setImageFailed(true)} />
-      : <span className="catalog-cover-placeholder"><small>IBA COLLEGE LIBRARY</small><strong>{book?.title || 'Untitled book'}</strong></span>}
-  </span>
+  return <BookCoverArt book={book} className="catalog-book-cover" externalLookup />
 }
 
 function StatusBadge({ value }) {
-  const label = value?.replaceAll('_', ' ') || 'Unknown'
+  const label = ({ 'due-soon': 'Due soon', ready_for_pickup: 'Ready for pickup' })[value] || value?.replaceAll('_', ' ') || 'Unknown'
   const danger = ['overdue', 'lost', 'damaged'].includes(value)
-  return <span className={danger ? 'table-status danger' : 'table-status'} data-status={value}>{label}</span>
+  const warning = value === 'due-soon' || value === 'ready_for_pickup'
+  return <span className={danger ? 'table-status danger' : warning ? 'table-status warning' : 'table-status'} data-status={value}>{label}</span>
 }
 
 function describeCardReservationError(message) {
@@ -120,7 +137,7 @@ function PublicReservationManager() {
   }
 
   return <details className="secondary-tool-disclosure public-reservation-manager">
-    <summary><span>Check or cancel a reservation</span><small>Use your library card and the private PIN issued by library staff.</small></summary>
+    <summary><span>Check or cancel an existing reservation</span><small>Use your library card and staff-issued PIN here. Sign in or register to place a new reservation.</small></summary>
     <div className="public-reservation-content">
       <form className="tool-form" onSubmit={lookupReservations}>
         <h3>My reservations</h3>
@@ -154,43 +171,71 @@ function PublicReservationManager() {
   </details>
 }
 
-export function CatalogPage({ onBack, role }) {
+export function CatalogPage({ onBack, onSignIn, role, initialSearch = '', initialBookId = '', onInitialBookOpened }) {
   const [books, setBooks] = useState([])
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(initialSearch)
   const [availability, setAvailability] = useState('all')
   const [category, setCategory] = useState('all')
   const [author, setAuthor] = useState('all')
   const [sortBy, setSortBy] = useState('title-asc')
   const [page, setPage] = useState(1)
-  const [selectedBookId, setSelectedBookId] = useState('')
+  const [selectedBookId, setSelectedBookId] = useState(initialBookId)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [actionError, setActionError] = useState('')
   const [message, setMessage] = useState('')
   const [reservingId, setReservingId] = useState('')
+  const [reservedBookIds, setReservedBookIds] = useState(() => new Set())
+  const catalogPageSize = role === 'member' ? 6 : CATALOG_PAGE_SIZE
 
   useEffect(() => {
     let active = true
-    const loadBooks = async () => {
+    const loadBooks = async (initialLoad = false) => {
       if (!supabase) {
         if (active) setLoading(false)
         return
       }
+      if (initialLoad && active) setLoading(true)
       try {
-        const { data, error: booksError } = await fetchAllRows(() => supabase.from('books').select('id, title, author, isbn, category, course_subject, description, publication_year, cover_url, book_copies(id, status)').order('title', { ascending: true }))
+        const { data, error: booksError } = await fetchAllRows(() => supabase.from('books').select('id, title, author, isbn, category, course_subject, description, publication_year, cover_url, cover_image_path, book_copies(id, status, location)').order('title', { ascending: true }))
         if (!active) return
         if (booksError) setError(booksError.message)
+        else setError('')
         setBooks(data ?? [])
       } catch (loadError) {
         if (import.meta.env.DEV) console.error('[catalog] books failed', loadError)
         if (active) setError('Unable to load the catalog. Please try again.')
       } finally {
-        if (active) setLoading(false)
+        if (initialLoad && active) setLoading(false)
       }
     }
-    loadBooks()
-    return () => { active = false }
+    void loadBooks(true)
+    const refreshOnFocus = () => { void loadBooks() }
+    const refreshOnVisible = () => {
+      if (document.visibilityState === 'visible') void loadBooks()
+    }
+    window.addEventListener('focus', refreshOnFocus)
+    document.addEventListener('visibilitychange', refreshOnVisible)
+    const channel = supabase?.channel?.('library-catalog-books')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'books' }, () => { void loadBooks() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'book_copies' }, () => { void loadBooks() })
+      .subscribe()
+    return () => {
+      active = false
+      window.removeEventListener('focus', refreshOnFocus)
+      document.removeEventListener('visibilitychange', refreshOnVisible)
+      if (channel) void supabase.removeChannel(channel)
+    }
   }, [])
+
+  useEffect(() => {
+    if (role !== 'public') return
+    setSearch(initialSearch)
+    setAvailability('all')
+    setCategory('all')
+    setAuthor('all')
+    setSortBy('title-asc')
+  }, [initialSearch, role])
 
   useEffect(() => {
     if (!selectedBookId) return
@@ -198,7 +243,13 @@ export function CatalogPage({ onBack, role }) {
     document.body.scrollTop = 0
   }, [selectedBookId])
 
-  const categories = [...new Set(books.map((book) => book.category).filter(Boolean))].sort()
+  useEffect(() => {
+    if (!initialBookId) return
+    setSelectedBookId(initialBookId)
+    onInitialBookOpened?.()
+  }, [initialBookId, onInitialBookOpened])
+
+  const categories = getBookCategories(books)
   const authors = [...new Set(books.map((book) => book.author).filter(Boolean))].sort()
   const hasActiveCatalogFilters = Boolean(search.trim()) || availability !== 'all' || category !== 'all' || author !== 'all' || sortBy !== 'title-asc'
   useEffect(() => { setPage(1) }, [search, availability, category, author, sortBy])
@@ -222,12 +273,12 @@ export function CatalogPage({ onBack, role }) {
     return (left.title || '').localeCompare(right.title || '')
   })
 
-  const pageCount = Math.max(1, Math.ceil(filteredBooks.length / CATALOG_PAGE_SIZE))
+  const pageCount = Math.max(1, Math.ceil(filteredBooks.length / catalogPageSize))
   const activePage = Math.min(page, pageCount)
-  const pageStartIndex = (activePage - 1) * CATALOG_PAGE_SIZE
-  const pageItems = filteredBooks.slice(pageStartIndex, pageStartIndex + CATALOG_PAGE_SIZE)
+  const pageStartIndex = (activePage - 1) * catalogPageSize
+  const pageItems = filteredBooks.slice(pageStartIndex, pageStartIndex + catalogPageSize)
   const firstBookNumber = filteredBooks.length === 0 ? 0 : pageStartIndex + 1
-  const lastBookNumber = Math.min(pageStartIndex + CATALOG_PAGE_SIZE, filteredBooks.length)
+  const lastBookNumber = Math.min(pageStartIndex + catalogPageSize, filteredBooks.length)
   const firstVisiblePage = Math.max(1, Math.min(activePage - 2, pageCount - 4))
   const visiblePages = Array.from({ length: Math.min(pageCount, 5) }, (_, index) => firstVisiblePage + index)
 
@@ -239,7 +290,13 @@ export function CatalogPage({ onBack, role }) {
     try {
       const { error: reservationError } = await supabase.rpc('reserve_book', { p_book_id: bookId })
       if (reservationError) setActionError(describeReservationError(reservationError.message))
-      else setMessage('Reservation successfully created or already active.')
+      else {
+        setReservedBookIds((current) => new Set(current).add(bookId))
+        setBooks((current) => current.map((book) => book.id === bookId
+          ? { ...book, book_copies: markFirstAvailableCopyReserved(book.book_copies || []) }
+          : book))
+        setMessage('Reservation request placed. Check My Reservations for your pickup status or queue position.')
+      }
     } catch (reservationError) {
       if (import.meta.env.DEV) console.error('[catalog] reservation failed', reservationError)
       setActionError(describeReservationError(reservationError?.message))
@@ -248,10 +305,10 @@ export function CatalogPage({ onBack, role }) {
     }
   }
 
-  if (selectedBookId) return <BookDetailsView bookId={selectedBookId} role={role} onBack={() => setSelectedBookId('')} />
+  if (selectedBookId) return <BookDetailsView bookId={selectedBookId} role={role} onBack={() => setSelectedBookId('')} onSignIn={onSignIn} />
 
   return (
-    <section className="content-section catalog-page">
+    <section className={role === 'member' ? 'content-section catalog-page member-catalog-page' : 'content-section catalog-page'}>
       <header className="book-page-header-card catalog-page-header">
         <div className="book-page-header-copy">
           <span className="eyebrow">Library catalog</span>
@@ -260,9 +317,10 @@ export function CatalogPage({ onBack, role }) {
         </div>
         {onBack && <button type="button" className="book-page-header-back" onClick={onBack}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /><path d="M20 12H9" /></svg>
-          <span>{role === 'public' ? 'Back to sign in' : 'Back to dashboard'}</span>
+          <span>{role === 'public' ? 'Back to home' : 'Back to dashboard'}</span>
         </button>}
       </header>
+      <div className="catalog-results-card">
       <div className="catalog-toolbar-panel">
         <div className="catalog-toolbar catalog-filters">
         <label className="toolbar-field catalog-search-field"><span>Search catalog</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Title, author, ISBN, course, or subject" aria-label="Search library" /></label>
@@ -276,12 +334,12 @@ export function CatalogPage({ onBack, role }) {
           {hasActiveCatalogFilters && <button type="button" className="catalog-clear-filters" onClick={clearCatalogFilters}>Clear Filters</button>}
         </div>
       </div>
-      {message && <div className="inline-success" role="status">{message}</div>}
-      {error && <div className="inline-error" role="alert">Unable to load the catalog. Please try again.</div>}
-      {actionError && <div className="inline-error" role="alert">{actionError}</div>}
+      {message && <div className="inline-success catalog-feedback" role="status">{message}</div>}
+      {error && <div className="inline-error catalog-feedback" role="alert">Unable to load the catalog. Please try again.</div>}
+      {actionError && <div className="inline-error catalog-feedback" role="alert">{actionError}</div>}
       {loading && <div className="catalog-grid catalog-skeleton-grid" role="status" aria-label="Loading catalog books" aria-busy="true">
         <span className="sr-only">Loading catalog...</span>
-        {Array.from({ length: CATALOG_PAGE_SIZE }, (_, index) => <div className="catalog-skeleton-card" key={index} aria-hidden="true"><div className="catalog-skeleton-cover" /><div className="catalog-skeleton-line title-line" /><div className="catalog-skeleton-line author-line" /><div className="catalog-skeleton-pill" /></div>)}
+        {Array.from({ length: catalogPageSize }, (_, index) => <div className="catalog-skeleton-card" key={index} aria-hidden="true"><div className="catalog-skeleton-cover" /><div className="catalog-skeleton-line title-line" /><div className="catalog-skeleton-line author-line" /><div className="catalog-skeleton-pill" /></div>)}
       </div>}
       {!loading && !error && filteredBooks.length === 0 && <div className="empty-state large catalog-empty-state">
         <div><strong>{books.length === 0 ? 'The catalog is empty right now' : 'No books match your search'}</strong><p>{books.length === 0 ? 'Library staff have not added any titles yet. Please ask at the circulation desk.' : 'Try a different search or clear your filters to see more of the collection.'}</p>{books.length > 0 && hasActiveCatalogFilters && <button type="button" className="secondary-button" onClick={clearCatalogFilters}>Clear Filters</button>}</div>
@@ -289,7 +347,9 @@ export function CatalogPage({ onBack, role }) {
       {!loading && !error && filteredBooks.length > 0 && <div className="catalog-grid">{pageItems.map((book) => {
         const copies = book.book_copies || []
         const availableCopies = copies.filter((copy) => copy.status === 'available').length
+        const availableLocations = [...new Set(copies.filter((copy) => copy.status === 'available').map((copy) => copy.location).filter(Boolean))]
         const hasCirculatingCopies = copies.some((copy) => ['borrowed', 'overdue', 'reserved'].includes(copy.status))
+        const canReserve = availableCopies > 0 || hasCirculatingCopies
         const subject = book.course_subject || book.category
         return <article className="book-card" key={book.id}>
           <button type="button" className="catalog-card-main" onClick={() => setSelectedBookId(book.id)} aria-label={`View details for ${book.title}`}>
@@ -299,9 +359,10 @@ export function CatalogPage({ onBack, role }) {
               <span className="book-author">{book.author || 'Author not recorded'}</span>
               <span className={availableCopies > 0 ? 'availability available' : 'availability unavailable'}>{availableCopies > 0 ? `Available · ${availableCopies} / ${copies.length}` : `Unavailable · 0 / ${copies.length}`}</span>
               {subject && <span className="catalog-card-subject" title={subject}>{subject}</span>}
+              {availableLocations.length > 0 && <span className="catalog-card-location" title={`Shelf: ${availableLocations.join(', ')}`}>Shelf: {availableLocations.join(', ')}</span>}
             </span>
           </button>
-          {role === 'member' && availableCopies === 0 && hasCirculatingCopies && <button type="button" className="catalog-card-reserve" onClick={() => reserve(book.id)} disabled={reservingId === book.id}>{reservingId === book.id ? 'Saving...' : 'Reserve'}</button>}
+          {role === 'member' && canReserve && <button type="button" className="catalog-card-reserve" onClick={() => reserve(book.id)} disabled={reservingId === book.id || reservedBookIds.has(book.id)}>{reservingId === book.id ? 'Saving...' : reservedBookIds.has(book.id) ? 'Hold placed' : 'Reserve'}</button>}
         </article>
       })}</div>}
       {!loading && !error && filteredBooks.length > 0 && <footer className="catalog-pagination-footer">
@@ -312,14 +373,17 @@ export function CatalogPage({ onBack, role }) {
           <button type="button" className="catalog-page-arrow" onClick={() => setPage((current) => Math.min(pageCount, current + 1))} disabled={activePage === pageCount}>Next</button>
         </nav>
       </footer>}
+      </div>
       {role === 'public' && <PublicReservationManager />}
     </section>
   )
 }
 
-export function MemberBooks({ userId }) {
+export function MemberBooks({ userId, onBack }) {
   const [loans, setLoans] = useState([])
   const [policy, setPolicy] = useState(defaultCirculationPolicy)
+  const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [actionMessage, setActionMessage] = useState('')
@@ -331,25 +395,27 @@ export function MemberBooks({ userId }) {
     let active = true
     const loadLoans = async () => {
       if (!supabase || !userId) {
-        if (active) setLoading(false)
+        if (active) { setLoading(false); setError('Your account is not available. Please sign in again.') }
         return
       }
+      setLoading(true)
+      setError('')
       try {
         const [loansResult, policyResult] = await Promise.all([
           fetchAllRows(() => supabase
             .from('loans')
-            .select('id, status, checked_out_at, due_at, returned_at, renewal_count, fine_amount, book_copies(barcode, books(title, author, cover_url, category))')
+            .select('id, status, checked_out_at, due_at, returned_at, renewal_count, fine_amount, book_copies(barcode, books(title, author, isbn, cover_url, cover_image_path, category))')
             .in('status', ['borrowed', 'overdue'])
             .order('created_at', { ascending: false })),
           supabase.rpc('get_circulation_policy'),
         ])
         if (!active) return
-        if (loansResult.error) setError(loansResult.error.message)
+        if (loansResult.error) throw loansResult.error
         setLoans(loansResult.data ?? [])
         if (!policyResult.error) setPolicy(normalizeCirculationPolicy(policyResult.data))
       } catch (loadError) {
         if (import.meta.env.DEV) console.error('[member books] load failed', loadError)
-        if (active) setError('Unable to load your books. Please try again.')
+        if (active) { setLoans([]); setError('Unable to load your books. Please try again.') }
       } finally {
         if (active) setLoading(false)
       }
@@ -358,26 +424,52 @@ export function MemberBooks({ userId }) {
     return () => { active = false }
   }, [userId, refreshKey])
 
+  const filteredLoans = loans.filter((loan) => {
+    const book = loan.book_copies?.books
+    const searchable = `${book?.title || ''} ${book?.author || ''} ${book?.category || ''} ${loan.book_copies?.barcode || ''}`.toLowerCase()
+    const dueState = getLoanDueState(loan.due_at, policy.due_soon_days)
+    return searchable.includes(query.trim().toLowerCase())
+      && (statusFilter === 'all' || (statusFilter === 'overdue' ? dueState === 'overdue' : statusFilter === 'due-soon' ? dueState === 'due-soon' : dueState === 'on-time'))
+  })
+  const { pageItems, pagination } = usePagination(filteredLoans, `${userId}:${query.trim()}:${statusFilter}`, 6, { numbered: true, always: true, label: 'borrowed books' })
+  const clearFilters = () => { setQuery(''); setStatusFilter('all') }
+
   return (
-    <section className="content-section">
-      <PageHeader eyebrow="Member library" title="My books" description="Keep track of the books currently checked out to your account." />
+    <section className="content-section member-page member-records-page">
+      <PageHeader eyebrow="Member library" title="My Books" description="Keep track of the books currently checked out to your account." onBack={onBack} />
       {actionMessage && <div className="inline-success" role="status">{actionMessage}</div>}
       {actionError && <div className="inline-error" role="alert">{actionError}</div>}
-      {error && <div className="inline-error" role="alert">Unable to load your books. Please try again.</div>}
-      {loading && <div className="empty-state loading-state">Loading your borrowed books...</div>}
-      {!loading && !error && loans.length === 0 && <div className="empty-state large">You do not have any books checked out.</div>}
-      {!loading && !error && loans.length > 0 && <div className="loan-grid">{loans.map((loan) => {
-        const book = loan.book_copies?.books
-        return <article className="loan-card" key={loan.id}>
-          <BookCover book={book} />
-            <div className="loan-card-content">
-            <div className="loan-card-heading"><div><h3>{book?.title || 'Unknown book'}</h3><p>{book?.author || 'Unknown author'}</p></div><StatusBadge value={loan.status} /></div>
-            <dl className="detail-list"><div><dt>Borrowed</dt><dd>{formatDate(loan.checked_out_at)}</dd></div><div><dt>Due date</dt><dd>{formatDate(loan.due_at)} {getLoanDueState(loan.due_at, policy.due_soon_days) === 'due-soon' && <span className="table-status warning">Due soon</span>}</dd></div><div><dt>Copy</dt><dd>{loan.book_copies?.barcode || 'Not recorded'}</dd></div><div><dt>Fine</dt><dd>{formatFine(loan.fine_amount)}</dd></div></dl>
-            {loan.status === 'borrowed' && getLoanDueState(loan.due_at, policy.due_soon_days) !== 'overdue' && loan.renewal_count < policy.max_renewals && <button type="button" className="table-action" onClick={() => renewLoan(loan.id)} disabled={renewingId === loan.id}>{renewingId === loan.id ? 'Renewing...' : `Renew (${policy.max_renewals - loan.renewal_count} left)`}</button>}
-          </div>
-        </article>
-      })}</div>}
-      <div className="requirement-note"><strong>Borrowing rules:</strong> Renewal limits, due dates, borrowing limits, and fines follow the library policy.</div>
+      <section className="member-record-card" aria-labelledby="member-books-heading">
+        <header className="member-record-card-heading"><div><h3 id="member-books-heading">Current Borrowings</h3><p>Due dates, remaining time, and renewal options for your checked-out books.</p></div><span>{loading ? 'Loading...' : error ? 'Unavailable' : `${filteredLoans.length} ${filteredLoans.length === 1 ? 'book' : 'books'}`}</span></header>
+        <div className="member-record-toolbar">
+          <label className="member-record-search"><span>Search borrowed books</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Title, author, subject, or barcode" aria-label="Search borrowed books" /></label>
+          <label><span>Status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter borrowed books by status"><option value="all">All statuses</option><option value="borrowed">On time</option><option value="due-soon">Due soon</option><option value="overdue">Overdue</option></select></label>
+          <button type="button" className="member-clear-filters" onClick={clearFilters} disabled={!query && statusFilter === 'all'}>Clear Filters</button>
+        </div>
+        {error && <div className="inline-error member-record-error" role="alert"><span>{error}</span><button type="button" className="retry-button" onClick={() => setRefreshKey((current) => current + 1)}>Try again</button></div>}
+        <div className="table-wrap member-record-table-wrap">
+          {loading ? <div className="empty-state compact loading-state member-record-state">Loading your borrowed books...</div>
+            : error ? <div className="empty-state compact member-record-state">Borrowing records are unavailable right now.</div>
+              : loans.length === 0 ? <div className="empty-state compact member-record-state">You do not have any books checked out.</div>
+                : filteredLoans.length === 0 ? <div className="empty-state compact member-record-state">No borrowed books match these filters.</div>
+                  : <table className="member-record-table"><thead><tr><th>Book</th><th>Borrowed</th><th>Due date</th><th>Time remaining</th><th>Status</th><th>Fine</th><th>Action</th></tr></thead><tbody>{pageItems.map((loan) => {
+                    const book = loan.book_copies?.books
+                    const dueState = getLoanDueState(loan.due_at, policy.due_soon_days)
+                    const millisecondsRemaining = new Date(loan.due_at).getTime() - Date.now()
+                    const days = Number.isFinite(millisecondsRemaining) ? Math.max(1, Math.ceil(Math.abs(millisecondsRemaining) / 86400000)) : null
+                    const displayedStatus = dueState === 'overdue' ? 'overdue' : dueState === 'due-soon' ? 'due-soon' : loan.status
+                    return <tr key={loan.id}>
+                      <td><span className="member-table-book"><MemberBookThumbnail book={book} /><span><strong>{book?.title || 'Unknown book'}</strong><small>{book?.author || 'Unknown author'}</small><small>Copy {loan.book_copies?.barcode || 'not recorded'}</small></span></span></td>
+                      <td>{formatDate(loan.checked_out_at)}</td><td>{formatDate(loan.due_at)}</td>
+                      <td>{days === null ? 'Not available' : dueState === 'overdue' ? `${days} ${days === 1 ? 'day' : 'days'} overdue` : `${days} ${days === 1 ? 'day' : 'days'} left`}</td>
+                      <td><StatusBadge value={displayedStatus} /></td><td>{formatFine(loan.fine_amount)}</td>
+                      <td>{loan.status === 'borrowed' && dueState !== 'overdue' && loan.renewal_count < policy.max_renewals && <button type="button" className="table-action" onClick={() => renewLoan(loan.id)} disabled={renewingId === loan.id}>{renewingId === loan.id ? 'Renewing...' : `Renew (${policy.max_renewals - loan.renewal_count} left)`}</button>}</td>
+                    </tr>
+                  })}</tbody></table>}
+        </div>
+        {!loading && !error && filteredLoans.length > 0 && pagination}
+      </section>
+      <p className="member-policy-note"><strong>Borrowing rules:</strong> Renewal limits, due dates, borrowing limits, and fines follow the library policy.</p>
     </section>
   )
 
@@ -402,8 +494,10 @@ export function MemberBooks({ userId }) {
   }
 }
 
-export function MemberReservations({ userId }) {
+export function MemberReservations({ userId, onBack }) {
   const [reservations, setReservations] = useState([])
+  const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [actionError, setActionError] = useState('')
@@ -413,6 +507,7 @@ export function MemberReservations({ userId }) {
   const loadReservations = useCallback(async () => {
     if (!supabase || !userId) {
       setLoading(false)
+      setLoadError('Your account is not available. Please sign in again.')
       return
     }
     setLoading(true)
@@ -421,7 +516,7 @@ export function MemberReservations({ userId }) {
     try {
       const { data, error: reservationsError } = await fetchAllRows(() => supabase
         .from('reservations')
-        .select('id, status, created_at, updated_at, pickup_expires_at, book_copies(barcode), books(title, author, cover_url)')
+        .select('id, status, created_at, updated_at, pickup_expires_at, book_copies(barcode), books(title, author, isbn, cover_url, cover_image_path)')
         .order('created_at', { ascending: false }))
       if (reservationsError) throw reservationsError
       const { data: positions, error: positionsError } = await supabase.rpc('my_reservation_positions')
@@ -430,6 +525,7 @@ export function MemberReservations({ userId }) {
       setReservations((data ?? []).map((item) => ({ ...item, queue_position: queue.get(item.id) })))
     } catch (loadError) {
       if (import.meta.env.DEV) console.error('[member reservations] load failed', loadError)
+      setReservations([])
       setLoadError('Unable to load reservations. Please try again.')
     } finally {
       setLoading(false)
@@ -455,23 +551,40 @@ export function MemberReservations({ userId }) {
     }
   }
 
-  const { pageItems, pagination } = usePagination(reservations, userId)
-
+  const filteredReservations = reservations.filter((reservation) => {
+    const searchable = `${reservation.books?.title || ''} ${reservation.books?.author || ''} ${reservation.status || ''} ${reservation.book_copies?.barcode || ''}`.toLowerCase()
+    return searchable.includes(query.trim().toLowerCase()) && (statusFilter === 'all' || reservation.status === statusFilter)
+  })
+  const { pageItems, pagination } = usePagination(filteredReservations, `${userId}:${query.trim()}:${statusFilter}`, 6, { numbered: true, always: true, label: 'reservations' })
+  const clearFilters = () => { setQuery(''); setStatusFilter('all') }
 
   return (
-    <section className="content-section">
-      <PageHeader eyebrow="Member library" title="Reservations" description="View your queue requests and cancel an active reservation when permitted." />
-      {(loadError || actionError) && <div className="inline-error with-action" role="alert"><span>{actionError ? 'Unable to update reservations. Please try again.' : 'Unable to load reservations. Please try again.'}</span><button type="button" className="retry-button" onClick={loadReservations}>Try again</button></div>}
-      {loading && <div className="empty-state loading-state">Loading reservations...</div>}
-      {!loading && !loadError && reservations.length === 0 && <div className="empty-state large">You have no reservations.</div>}
-      {!loading && !loadError && reservations.length > 0 && <div className="table-wrap"><table><thead><tr><th>Book</th><th>Reserved</th><th>Status</th><th>Queue / pickup</th><th>Action</th></tr></thead><tbody>{pageItems.map((reservation) => <tr key={reservation.id}>
-        <td><strong>{reservation.books?.title || 'Unknown book'}</strong><small className="table-subtext">{reservation.books?.author || 'Unknown author'}</small></td>
-        <td>{formatDate(reservation.created_at)}</td>
-        <td><StatusBadge value={reservation.status} /></td>
-        <td>{reservation.status === 'waiting' ? `Position ${reservation.queue_position ?? 'pending'}` : reservation.book_copies?.barcode || '?'}<small className="table-subtext">{reservation.pickup_expires_at ? `Collect by ${new Date(reservation.pickup_expires_at).toLocaleString()}` : ''}</small></td>
-        <td>{['waiting', 'ready_for_pickup'].includes(reservation.status) ? <button type="button" className="table-action" onClick={() => setConfirmingReservation(reservation)} disabled={cancellingId === reservation.id}>{cancellingId === reservation.id ? 'Cancelling...' : 'Cancel'}</button> : <span className="muted">No action</span>}</td>
-      </tr>)}</tbody></table></div>}
-      <div className="requirement-note"><strong>Queue position and expiration:</strong> Waiting positions follow request order. Ready holds show the assigned copy and collection deadline.</div>
+    <section className="content-section member-page member-records-page">
+      <PageHeader eyebrow="Member library" title="Reservations" description="View pickup holds and queue requests, then cancel an active reservation when needed." onBack={onBack} />
+      <section className="member-record-card" aria-labelledby="member-reservations-heading">
+        <header className="member-record-card-heading"><div><h3 id="member-reservations-heading">My Reservations</h3><p>Pickup holds, queue position, deadlines, and reservation status.</p></div><span>{loading ? 'Loading...' : loadError ? 'Unavailable' : `${filteredReservations.length} ${filteredReservations.length === 1 ? 'reservation' : 'reservations'}`}</span></header>
+        <div className="member-record-toolbar">
+          <label className="member-record-search"><span>Search reservations</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Book title, author, or barcode" aria-label="Search reservations" /></label>
+          <label><span>Status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter reservations by status"><option value="all">All statuses</option><option value="waiting">Waiting</option><option value="ready_for_pickup">Ready for pickup</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option><option value="expired">Expired</option></select></label>
+          <button type="button" className="member-clear-filters" onClick={clearFilters} disabled={!query && statusFilter === 'all'}>Clear Filters</button>
+        </div>
+        {(loadError || actionError) && <div className="inline-error with-action member-record-error" role="alert"><span>{actionError ? 'Unable to update reservations. Please try again.' : 'Unable to load reservations. Please try again.'}</span><button type="button" className="retry-button" onClick={loadReservations}>Try again</button></div>}
+        <div className="table-wrap member-record-table-wrap">
+          {loading ? <div className="empty-state compact loading-state member-record-state">Loading reservations...</div>
+            : loadError ? <div className="empty-state compact member-record-state">Your reservations are unavailable right now.</div>
+              : reservations.length === 0 ? <div className="empty-state compact member-record-state">You have no reservations.</div>
+                : filteredReservations.length === 0 ? <div className="empty-state compact member-record-state">No reservations match these filters.</div>
+                  : <table className="member-record-table"><thead><tr><th>Book</th><th>Reserved</th><th>Status</th><th>Queue / pickup</th><th>Action</th></tr></thead><tbody>{pageItems.map((reservation) => <tr key={reservation.id}>
+                    <td><span className="member-table-book"><MemberBookThumbnail book={reservation.books} /><span><strong>{reservation.books?.title || 'Unknown book'}</strong><small>{reservation.books?.author || 'Unknown author'}</small></span></span></td>
+                    <td>{formatDate(reservation.created_at)}</td>
+                    <td><StatusBadge value={reservation.status} /></td>
+                    <td>{reservation.status === 'waiting' ? `Position ${reservation.queue_position ?? 'pending'}` : reservation.book_copies?.barcode || 'Not assigned'}<small className="table-subtext">{reservation.pickup_expires_at ? `Collect by ${new Date(reservation.pickup_expires_at).toLocaleString()}` : ''}</small></td>
+                    <td>{['waiting', 'ready_for_pickup'].includes(reservation.status) ? <button type="button" className="table-action" onClick={() => setConfirmingReservation(reservation)} disabled={cancellingId === reservation.id}>{cancellingId === reservation.id ? 'Cancelling...' : 'Cancel'}</button> : <span className="muted">No action</span>}</td>
+                  </tr>)}</tbody></table>}
+        </div>
+        {!loading && !loadError && filteredReservations.length > 0 && pagination}
+      </section>
+      <p className="member-policy-note"><strong>Pickup holds and queue order:</strong> Available copies go to the earliest active request. If you are next, the copy is held until the pickup deadline; otherwise, your request waits in line.</p>
       <ConfirmDialog
         open={Boolean(confirmingReservation)}
         title="Cancel reservation?"
@@ -485,23 +598,27 @@ export function MemberReservations({ userId }) {
           if (reservation) void cancelReservation(reservation)
         }}
       />
-    {pagination}</section>
+    </section>
   )
 }
 
-export function MemberHistory({ userId }) {
+export function MemberHistory({ userId, onBack }) {
   const [history, setHistory] = useState([])
   const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [retryKey, setRetryKey] = useState(0)
 
   useEffect(() => {
     let active = true
     const loadHistory = async () => {
       if (!supabase || !userId) {
-        if (active) setLoading(false)
+        if (active) { setLoading(false); setError('Your account is not available. Please sign in again.') }
         return
       }
+      setLoading(true)
+      setError('')
       try {
         const { data, error: historyError } = await fetchAllRows(() => supabase
           .from('loans')
@@ -509,47 +626,63 @@ export function MemberHistory({ userId }) {
           .in('status', ['returned', 'lost', 'damaged'])
           .order('created_at', { ascending: false }))
         if (!active) return
-        if (historyError) setError(historyError.message)
+        if (historyError) throw historyError
         setHistory(data ?? [])
       } catch (loadError) {
         if (import.meta.env.DEV) console.error('[member history] load failed', loadError)
-        if (active) setError('Unable to load your history. Please try again.')
+        if (active) { setHistory([]); setError('Unable to load your history. Please try again.') }
       } finally {
         if (active) setLoading(false)
       }
     }
     loadHistory()
     return () => { active = false }
-  }, [userId])
+  }, [userId, retryKey])
 
-  const filtered = history.filter((loan) => `${loan.book_copies?.books?.title || ''} ${loan.book_copies?.books?.author || ''}`.toLowerCase().includes(query.trim().toLowerCase()))
-
-  const { pageItems, pagination } = usePagination(filtered, '')
-
+  const filtered = history.filter((loan) => `${loan.book_copies?.books?.title || ''} ${loan.book_copies?.books?.author || ''} ${loan.status || ''}`.toLowerCase().includes(query.trim().toLowerCase())
+    && (statusFilter === 'all' || loan.status === statusFilter))
+  const { pageItems, pagination } = usePagination(filtered, `${userId}:${query.trim()}:${statusFilter}`, 6, { numbered: true, always: true, label: 'history records' })
+  const clearFilters = () => { setQuery(''); setStatusFilter('all') }
 
   return (
-    <section className="content-section">
-      <PageHeader eyebrow="Member library" title="Borrowing history" description="Review completed and closed borrowing transactions. Historical records cannot be edited." />
-      <div className="catalog-toolbar single-search"><label className="toolbar-field"><span>Search history</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Book title or author" aria-label="Search borrowing history" /></label></div>
-      {error && <div className="inline-error" role="alert">Unable to load your history. Please try again.</div>}
-      {loading && <div className="empty-state loading-state">Loading borrowing history...</div>}
-      {!loading && !error && filtered.length === 0 && <div className="empty-state large">No matching borrowing history.</div>}
-      {!loading && !error && filtered.length > 0 && <div className="table-wrap"><table><thead><tr><th>Book</th><th>Borrowed</th><th>Due</th><th>Returned</th><th>Status</th></tr></thead><tbody>{pageItems.map((loan) => <tr key={loan.id}>
-        <td><strong>{loan.book_copies?.books?.title || 'Unknown book'}</strong><small className="table-subtext">{loan.book_copies?.books?.author || 'Unknown author'}</small></td><td>{formatDate(loan.checked_out_at)}</td><td>{formatDate(loan.due_at)}</td><td>{formatDate(loan.returned_at)}</td><td><StatusBadge value={loan.status} /></td>
-      </tr>)}</tbody></table></div>}
-    {pagination}</section>
+    <section className="content-section member-page member-records-page">
+      <PageHeader eyebrow="Member library" title="History" description="Review completed and closed borrowing transactions. Historical records cannot be edited." onBack={onBack} />
+      <section className="member-record-card" aria-labelledby="member-history-heading">
+        <header className="member-record-card-heading"><div><h3 id="member-history-heading">Borrowing History</h3><p>Completed, lost, and damaged borrowing transactions.</p></div><span>{loading ? 'Loading...' : error ? 'Unavailable' : `${filtered.length} ${filtered.length === 1 ? 'record' : 'records'}`}</span></header>
+        <div className="member-record-toolbar">
+          <label className="member-record-search"><span>Search history</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Book title, author, or status" aria-label="Search borrowing history" /></label>
+          <label><span>Status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter history by status"><option value="all">All statuses</option><option value="returned">Returned</option><option value="lost">Lost</option><option value="damaged">Damaged</option></select></label>
+          <button type="button" className="member-clear-filters" onClick={clearFilters} disabled={!query && statusFilter === 'all'}>Clear Filters</button>
+        </div>
+        {error && <div className="inline-error member-record-error" role="alert"><span>{error}</span><button type="button" className="retry-button" onClick={() => setRetryKey((current) => current + 1)}>Try again</button></div>}
+        <div className="table-wrap member-record-table-wrap">
+          {loading ? <div className="empty-state compact loading-state member-record-state">Loading borrowing history...</div>
+            : error ? <div className="empty-state compact member-record-state">Your history is unavailable right now.</div>
+              : history.length === 0 ? <div className="empty-state compact member-record-state">No borrowing history is available yet.</div>
+                : filtered.length === 0 ? <div className="empty-state compact member-record-state">No history records match these filters.</div>
+                  : <table className="member-record-table"><thead><tr><th>Book</th><th>Borrowed</th><th>Due</th><th>Returned</th><th>Status</th></tr></thead><tbody>{pageItems.map((loan) => <tr key={loan.id}>
+                    <td><strong>{loan.book_copies?.books?.title || 'Unknown book'}</strong><small className="table-subtext">{loan.book_copies?.books?.author || 'Unknown author'}</small></td><td>{formatDate(loan.checked_out_at)}</td><td>{formatDate(loan.due_at)}</td><td>{formatDate(loan.returned_at)}</td><td><StatusBadge value={loan.status} /></td>
+                  </tr>)}</tbody></table>}
+        </div>
+        {!loading && !error && filtered.length > 0 && pagination}
+      </section>
+    </section>
   )
 }
 
-export function MemberNotifications({ userId }) {
+export function MemberNotifications({ userId, onBack }) {
   const [notifications, setNotifications] = useState([])
+  const [query, setQuery] = useState('')
+  const [readFilter, setReadFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [actionError, setActionError] = useState('')
+  const [retryKey, setRetryKey] = useState(0)
 
   const loadNotifications = useCallback(async () => {
     if (!supabase || !userId) {
       setLoading(false)
+      setLoadError('Your account is not available. Please sign in again.')
       return
     }
     setLoading(true)
@@ -557,17 +690,18 @@ export function MemberNotifications({ userId }) {
     setActionError('')
     try {
       const { data, error: notificationsError } = await fetchAllRows(() => supabase.from('notifications').select('id, title, message, read_at, created_at').eq('member_id', userId).order('created_at', { ascending: false }))
-      if (notificationsError) setLoadError(notificationsError.message)
+      if (notificationsError) throw notificationsError
       setNotifications(data ?? [])
     } catch (loadError) {
       if (import.meta.env.DEV) console.error('[member notifications] load failed', loadError)
+      setNotifications([])
       setLoadError('Unable to load notifications. Please try again.')
     } finally {
       setLoading(false)
     }
   }, [userId])
 
-  useEffect(() => { void loadNotifications() }, [loadNotifications])
+  useEffect(() => { void loadNotifications() }, [loadNotifications, retryKey])
 
   const markRead = async (notification) => {
     if (!supabase || notification.read_at) return
@@ -583,22 +717,41 @@ export function MemberNotifications({ userId }) {
     }
   }
 
-  const { pageItems, pagination } = usePagination(notifications, userId)
+  const filteredNotifications = notifications.filter((notification) => `${notification.title || ''} ${notification.message || ''}`.toLowerCase().includes(query.trim().toLowerCase())
+    && (readFilter === 'all' || (readFilter === 'unread' ? !notification.read_at : Boolean(notification.read_at))))
+  const { pageItems, pagination } = usePagination(filteredNotifications, `${userId}:${query.trim()}:${readFilter}`, 6, { numbered: true, always: true, label: 'notifications' })
+  const clearFilters = () => { setQuery(''); setReadFilter('all') }
 
 
   return (
-    <section className="content-section">
-      <PageHeader eyebrow="Member library" title="Notifications" description="Stay informed about your reservations and borrowing activity." />
-      {(loadError || actionError) && <div className="inline-error with-action" role="alert"><span>{actionError ? 'Unable to update notifications. Please try again.' : 'Unable to load notifications. Please try again.'}</span><button type="button" className="retry-button" onClick={loadNotifications}>Try again</button></div>}
-      {loading && <div className="empty-state loading-state">Loading notifications...</div>}
-      {!loading && !loadError && notifications.length === 0 && <div className="empty-state large">No notifications yet.</div>}
-      {!loading && !loadError && notifications.length > 0 && <div className="notification-list">{pageItems.map((notification) => <article className={notification.read_at ? 'notification-item' : 'notification-item unread'} key={notification.id}><div><span className="eyebrow">{formatDate(notification.created_at)}</span><h3>{notification.title}</h3><p>{notification.message}</p></div>{!notification.read_at && <button type="button" className="text-button" onClick={() => markRead(notification)}>Mark as read</button>}</article>)}</div>}
-      <div className="requirement-note"><strong>Notification delivery:</strong> Notifications shown here are the messages currently stored for your account.</div>
-    {pagination}</section>
+    <section className="content-section member-page member-records-page">
+      <PageHeader eyebrow="Member library" title="Notifications" description="Stay informed about your reservations and borrowing activity." onBack={onBack} />
+      <section className="member-record-card" aria-labelledby="member-notifications-heading">
+        <header className="member-record-card-heading"><div><h3 id="member-notifications-heading">Inbox</h3><p>Updates stored for your member account.</p></div><span>{loading ? 'Loading...' : loadError ? 'Unavailable' : `${filteredNotifications.length} ${filteredNotifications.length === 1 ? 'notification' : 'notifications'}`}</span></header>
+        <div className="member-record-toolbar">
+          <label className="member-record-search"><span>Search notifications</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Title or message" aria-label="Search notifications" /></label>
+          <label><span>Read status</span><select value={readFilter} onChange={(event) => setReadFilter(event.target.value)} aria-label="Filter notifications by read status"><option value="all">All notifications</option><option value="unread">Unread</option><option value="read">Read</option></select></label>
+          <button type="button" className="member-clear-filters" onClick={clearFilters} disabled={!query && readFilter === 'all'}>Clear Filters</button>
+        </div>
+        {(loadError || actionError) && <div className="inline-error with-action member-record-error" role="alert"><span>{actionError ? 'Unable to update notifications. Please try again.' : 'Unable to load notifications. Please try again.'}</span><button type="button" className="retry-button" onClick={() => { if (loadError) setRetryKey((current) => current + 1); else void loadNotifications() }}>Try again</button></div>}
+        <div className="member-notification-list">
+          {loading ? <div className="empty-state compact loading-state member-record-state">Loading notifications...</div>
+            : loadError ? <div className="empty-state compact member-record-state">Your notifications are unavailable right now.</div>
+              : notifications.length === 0 ? <div className="empty-state compact member-record-state">No notifications yet.</div>
+                : filteredNotifications.length === 0 ? <div className="empty-state compact member-record-state">No notifications match these filters.</div>
+                  : pageItems.map((notification) => <article className={notification.read_at ? 'notification-item' : 'notification-item unread'} key={notification.id}>
+                    <div><span className="member-activity-date">{formatDate(notification.created_at)}</span><h3>{notification.title}</h3><p>{notification.message}</p></div>
+                    {!notification.read_at && <button type="button" className="text-button" onClick={() => markRead(notification)}>Mark as read</button>}
+                  </article>)}
+        </div>
+        {!loading && !loadError && filteredNotifications.length > 0 && pagination}
+        <p className="member-policy-note"><strong>Notification delivery:</strong> These are the messages currently stored for your account.</p>
+      </section>
+    </section>
   )
 }
 
-export function MemberProfile({ userId, session, profile }) {
+export function MemberProfile({ userId, session, profile, onBack }) {
   const [joinedAt, setJoinedAt] = useState('')
   const [loading, setLoading] = useState(true)
 
@@ -623,22 +776,21 @@ export function MemberProfile({ userId, session, profile }) {
   }, [userId])
 
   return (
-    <section className="content-section">
-      <PageHeader eyebrow="Account" title="Profile" description="Your library account details and access level." />
+    <section className="content-section member-page">
+      <PageHeader eyebrow="Account" title="Profile" description="Your library account details and access level." onBack={onBack} />
       <div className="profile-card"><div className="profile-avatar">{(profile?.full_name || profile?.school_id || session?.user?.email || 'U').slice(0, 1).toUpperCase()}</div><div className="profile-fields"><div><span>Full name</span><strong>{profile?.full_name || 'Not provided'}</strong></div><div><span>{profile?.school_id ? 'School ID' : 'Email'}</span><strong>{profile?.school_id || session?.user?.email || 'Not available'}</strong></div><div><span>Member ID</span><strong><code>{userId?.slice(0, 12) || 'Not available'}...</code></strong></div><div><span>Role</span><strong>{profile?.role || 'member'}</strong></div><div><span>Account status</span><strong>{session?.user?.confirmed_at ? 'Confirmed' : 'Pending confirmation'}</strong></div><div><span>Date joined</span><strong>{loading ? 'Loading...' : formatDate(joinedAt)}</strong></div></div></div>
       <div className="requirement-note"><strong>Profile information:</strong> Account details are read-only in the current system.</div>
     </section>
   )
 }
 
-export function BookDetailsView({ bookId, role, onBack }) {
+export function BookDetailsView({ bookId, role, onBack, onSignIn }) {
   const [book, setBook] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [saving, setSaving] = useState(false)
-  const [cardNumber, setCardNumber] = useState('')
-  const [reservationPin, setReservationPin] = useState('')
+  const [reservationPlaced, setReservationPlaced] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -649,7 +801,7 @@ export function BookDetailsView({ bookId, role, onBack }) {
       }
       try {
         const copyColumns = role === 'public' ? 'id, status, location' : 'id, barcode, status, location, condition'
-        const { data, error: bookError } = await supabase.from('books').select(`id, title, author, isbn, category, course_subject, description, publication_year, cover_url, created_at, book_copies(${copyColumns})`).eq('id', bookId).maybeSingle()
+        const { data, error: bookError } = await supabase.from('books').select(`id, title, author, isbn, category, course_subject, description, publication_year, cover_url, cover_image_path, created_at, book_copies(${copyColumns})`).eq('id', bookId).maybeSingle()
         if (!active) return
         if (bookError) setError(bookError.message)
         setBook(data)
@@ -666,34 +818,21 @@ export function BookDetailsView({ bookId, role, onBack }) {
 
   const reserveBook = async (event) => {
     event?.preventDefault()
-    if (!supabase || !book) return
+    if (!supabase || !book || role !== 'member') return
     setSaving(true)
     setMessage('')
     setError('')
     try {
-      if (role === 'public') {
-        const { data, error: reservationError } = await supabase.rpc('reserve_book_by_card', {
-          p_card_number: cardNumber.trim(),
-          p_pin: reservationPin,
-          p_book_id: book.id,
-        })
-        if (reservationError) throw reservationError
-        if (data?.verified === false) {
-          setError(describeCardReservationError('card or pin'))
-          return
-        }
-        setMessage(data?.status === 'ready_for_pickup'
-          ? `Your hold is ready. Collect it by ${data.pickup_expires_at ? new Date(data.pickup_expires_at).toLocaleString() : 'the deadline shown under My reservations'}.`
-          : `Your hold is active at queue position ${data?.queue_position ?? 'pending'}. Check “My reservations” for updates and the pickup deadline.`)
-        setReservationPin('')
-      } else {
-        const { error: reservationError } = await supabase.rpc('reserve_book', { p_book_id: book.id })
-        if (reservationError) setError(describeReservationError(reservationError.message))
-        else setMessage('Reservation successfully created or already active.')
+      const { error: reservationError } = await supabase.rpc('reserve_book', { p_book_id: book.id })
+      if (reservationError) setError(describeReservationError(reservationError.message))
+      else {
+        setBook((current) => current ? { ...current, book_copies: markFirstAvailableCopyReserved(current.book_copies || []) } : current)
+        setReservationPlaced(true)
+        setMessage('Reservation request placed. Check My Reservations for your pickup status or queue position.')
       }
     } catch (reservationError) {
       if (import.meta.env.DEV) console.error('[book details] reservation failed', reservationError)
-      setError(role === 'public' ? describeCardReservationError(reservationError?.message) : describeReservationError(reservationError?.message))
+      setError(describeReservationError(reservationError?.message))
     } finally {
       setSaving(false)
     }
@@ -706,6 +845,7 @@ export function BookDetailsView({ bookId, role, onBack }) {
   const availableCopies = copies.filter((copy) => copy.status === 'available').length
   const availableLocations = [...new Set(copies.filter((copy) => copy.status === 'available').map((copy) => copy.location).filter(Boolean))]
   const hasCirculatingCopies = copies.some((copy) => ['borrowed', 'overdue', 'reserved'].includes(copy.status))
+  const canReserve = availableCopies > 0 || hasCirculatingCopies
 
   return (
     <section className="content-section">
@@ -714,15 +854,14 @@ export function BookDetailsView({ bookId, role, onBack }) {
       {error && <div className="inline-error" role="alert">{error}</div>}
       <article className="book-detail-card">
         <div className="book-detail-cover"><BookCover book={book} /></div>
-        <div className="book-detail-content"><span className={availableCopies > 0 ? 'availability available' : 'availability unavailable'}>{availableCopies > 0 ? 'Available' : 'Unavailable'}</span><h2>{book.title}</h2><p className="book-detail-author">{book.author}</p><p className="book-detail-description">{book.description || 'No description has been added to the catalog yet.'}</p><dl className="detail-list detail-list-wide"><div><dt>ISBN</dt><dd>{book.isbn || 'Not recorded'}</dd></div><div><dt>Course / subject</dt><dd>{book.course_subject || 'Not tagged'}</dd></div><div><dt>Category</dt><dd>{book.category || 'Uncategorized'}</dd></div><div><dt>Publication year</dt><dd>{book.publication_year || 'Not recorded'}</dd></div><div><dt>Total copies</dt><dd>{copies.length}</dd></div><div><dt>Available copies</dt><dd>{availableCopies}</dd></div><div><dt>Shelf location</dt><dd>{availableLocations.join(', ') || 'Ask at the circulation desk'}</dd></div></dl>{role === 'member' && availableCopies === 0 && hasCirculatingCopies && <button className="primary-button detail-action" onClick={reserveBook} disabled={saving}>{saving ? 'Saving reservation...' : 'Reserve book'}</button>}
-          {role === 'public' && availableCopies === 0 && copies.length > 0 && hasCirculatingCopies && <form className="tool-form public-reserve-form" onSubmit={reserveBook}>
-            <h3>Join the hold queue</h3>
-            <p className="muted">Use your library card and the private reservation PIN issued by staff. Check My reservations in the catalog for queue updates and pickup deadlines.</p>
-            <label>Library card number<input value={cardNumber} onChange={(event) => setCardNumber(event.target.value)} autoComplete="username" maxLength="100" required /></label>
-            <label>Reservation PIN<input type="password" inputMode="numeric" autoComplete="current-password" value={reservationPin} onChange={(event) => setReservationPin(event.target.value.replace(/\D/g, '').slice(0, 12))} minLength="6" maxLength="12" pattern="[0-9]{6,12}" required /></label>
-            <button className="primary-button" disabled={saving || !cardNumber.trim() || reservationPin.length < 6}>{saving ? 'Placing hold...' : 'Reserve this book'}</button>
-          </form>}
-          {role === 'public' && copies.length > 0 && availableCopies === 0 && !hasCirculatingCopies && <p className="requirement-note">No copies are currently circulating, so this title cannot be queued online. Ask library staff for help.</p>}</div>
+        <div className="book-detail-content"><span className={availableCopies > 0 ? 'availability available' : 'availability unavailable'}>{availableCopies > 0 ? 'Available' : 'Unavailable'}</span><h2>{book.title}</h2><p className="book-detail-author">{book.author}</p><p className="book-detail-description">{book.description || 'No description has been added to the catalog yet.'}</p><dl className="detail-list detail-list-wide"><div><dt>ISBN</dt><dd>{book.isbn || 'Not recorded'}</dd></div><div><dt>Course / subject</dt><dd>{book.course_subject || 'Not tagged'}</dd></div><div><dt>Category</dt><dd>{book.category || 'Uncategorized'}</dd></div><div><dt>Publication year</dt><dd>{book.publication_year || 'Not recorded'}</dd></div><div><dt>Total copies</dt><dd>{copies.length}</dd></div><div><dt>Available copies</dt><dd>{availableCopies}</dd></div><div><dt>Shelf location</dt><dd>{availableLocations.join(', ') || 'Ask at the circulation desk'}</dd></div></dl>{role === 'member' && canReserve && <><button className="primary-button detail-action" onClick={reserveBook} disabled={saving || reservationPlaced}>{saving ? 'Placing hold...' : reservationPlaced ? 'Hold placed' : 'Reserve for pickup'}</button><p className="requirement-note">Available copies are assigned in request order. If a copy is not ready for you, your reservation stays in the queue.</p></>}
+          {role === 'public' && copies.length > 0 && canReserve && <div className="requirement-note public-reservation-signin">
+            <strong>Sign in to reserve this book</strong>
+            <p>Create a member account or sign in to request a pickup hold. Available copies are assigned in request order; if no copy is ready for you, your request joins the queue.</p>
+            <button type="button" className="primary-button" onClick={onSignIn}>Sign in or create an account</button>
+          </div>}
+          {role === 'public' && copies.length > 0 && !canReserve && <p className="requirement-note">There are no usable copies to reserve online right now. Ask library staff for help.</p>}
+          {role === 'member' && copies.length > 0 && !canReserve && <p className="requirement-note">There are no usable copies to reserve online right now. Ask library staff for help.</p>}</div>
       </article>
       {role !== 'public' && <div className="requirement-note"><strong>Catalog note:</strong> See Reservations for your queue position, assigned copy, and pickup deadline.</div>}
     </section>
