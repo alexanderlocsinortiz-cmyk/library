@@ -125,7 +125,7 @@ describe('CatalogPage browsing', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Reserve' })[0])
 
     await waitFor(() => expect(mock.rpc).toHaveBeenCalledWith('reserve_book', { p_book_id: 'book-0' }))
-    expect(await screen.findByRole('status')).toHaveTextContent('Reservation request placed')
+    expect(await screen.findByRole('status')).toHaveTextContent('Request submitted. Library staff must approve it before a copy is held.')
   })
 
   it('offers the pickup hold action in book details when a copy is available', async () => {
@@ -135,7 +135,7 @@ describe('CatalogPage browsing', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Reserve for pickup' }))
 
     await waitFor(() => expect(mock.rpc).toHaveBeenCalledWith('reserve_book', { p_book_id: 'book-0' }))
-    expect(await screen.findByRole('status')).toHaveTextContent('Reservation request placed')
+    expect(await screen.findByRole('status')).toHaveTextContent('Request submitted. Library staff must approve it before a copy is held.')
   })
 
   it('shows cover placeholders and the loading skeleton accessibly', async () => {

@@ -20,17 +20,6 @@ function describeReservationError(message) {
   return 'Unable to create the reservation. Please try again or ask library staff for help.'
 }
 
-function markFirstAvailableCopyReserved(copies = []) {
-  let assigned = false
-  return copies.map((copy) => {
-    if (!assigned && copy.status === 'available') {
-      assigned = true
-      return { ...copy, status: 'reserved' }
-    }
-    return copy
-  })
-}
-
 function PageHeader({ eyebrow, title, description, onBack }) {
   return (
     <header className="book-page-header-card member-page-header">
@@ -59,8 +48,13 @@ function CatalogBookCover({ book }) {
   return <BookCoverArt book={book} className="catalog-book-cover" externalLookup />
 }
 
-function StatusBadge({ value }) {
-  const label = ({ 'due-soon': 'Due soon', ready_for_pickup: 'Ready for pickup' })[value] || value?.replaceAll('_', ' ') || 'Unknown'
+function StatusBadge({ value, reservation }) {
+  const reservationLabel = reservation?.status === 'waiting'
+    ? reservation.staff_approved_at || reservation.staff_approved ? 'Waiting for a copy' : 'Pending staff approval'
+    : reservation?.status === 'ready_for_pickup'
+      ? reservation.pickup_confirmed_at || reservation.pickup_confirmed ? 'Ready for pickup' : 'Staff verifying copy'
+      : null
+  const label = reservationLabel || ({ 'due-soon': 'Due soon', ready_for_pickup: 'Ready for pickup' })[value] || value?.replaceAll('_', ' ') || 'Unknown'
   const danger = ['overdue', 'lost', 'damaged'].includes(value)
   const warning = value === 'due-soon' || value === 'ready_for_pickup'
   return <span className={danger ? 'table-status danger' : warning ? 'table-status warning' : 'table-status'} data-status={value}>{label}</span>
@@ -152,8 +146,10 @@ function PublicReservationManager() {
       {reservations && reservations.length === 0 && <div className="empty-state">No active reservations were found for this card.</div>}
       {reservations?.length > 0 && <div className="reservation-lookup-list">{reservations.map((reservation) => <article className="reservation-lookup-card" key={reservation.reservation_id}>
         <div><strong>{reservation.book_title}</strong><small>{reservation.author || 'Author not recorded'}</small></div>
-        <StatusBadge value={reservation.status} />
-        <p>{reservation.status === 'waiting' ? `Queue position ${reservation.queue_position ?? 'pending'}` : `Collect by ${new Date(reservation.pickup_expires_at).toLocaleString()}`}</p>
+        <StatusBadge value={reservation.status} reservation={reservation} />
+        <p>{reservation.status === 'waiting'
+          ? reservation.staff_approved ? `Queue position ${reservation.queue_position ?? 'pending'}` : 'Waiting for library staff approval'
+          : reservation.pickup_confirmed ? `Collect by ${new Date(reservation.pickup_expires_at).toLocaleString()}` : 'Staff is verifying the assigned copy'}</p>
         {['waiting', 'ready_for_pickup'].includes(reservation.status) && <button type="button" className="table-action" onClick={() => setConfirmingReservation(reservation)} disabled={cancellingId === reservation.reservation_id}>{cancellingId === reservation.reservation_id ? 'Cancelling...' : 'Cancel hold'}</button>}
       </article>)}</div>}
       <p className="form-helper">Check here for pickup status and deadlines. Ask library staff to set or reset your PIN after they verify your card. The library does not send reservation email.</p>
@@ -292,10 +288,7 @@ export function CatalogPage({ onBack, onSignIn, role, initialSearch = '', initia
       if (reservationError) setActionError(describeReservationError(reservationError.message))
       else {
         setReservedBookIds((current) => new Set(current).add(bookId))
-        setBooks((current) => current.map((book) => book.id === bookId
-          ? { ...book, book_copies: markFirstAvailableCopyReserved(book.book_copies || []) }
-          : book))
-        setMessage('Reservation request placed. Check My Reservations for your pickup status or queue position.')
+        setMessage('Request submitted. Library staff must approve it before a copy is held.')
       }
     } catch (reservationError) {
       if (import.meta.env.DEV) console.error('[catalog] reservation failed', reservationError)
@@ -516,7 +509,7 @@ export function MemberReservations({ userId, onBack }) {
     try {
       const { data, error: reservationsError } = await fetchAllRows(() => supabase
         .from('reservations')
-        .select('id, status, created_at, updated_at, pickup_expires_at, book_copies(barcode), books(title, author, isbn, cover_url, cover_image_path)')
+        .select('id, status, created_at, updated_at, pickup_expires_at, staff_approved_at, pickup_confirmed_at, book_copies(barcode), books(title, author, isbn, cover_url, cover_image_path)')
         .order('created_at', { ascending: false }))
       if (reservationsError) throw reservationsError
       const { data: positions, error: positionsError } = await supabase.rpc('my_reservation_positions')
@@ -577,14 +570,16 @@ export function MemberReservations({ userId, onBack }) {
                   : <table className="member-record-table"><thead><tr><th>Book</th><th>Reserved</th><th>Status</th><th>Queue / pickup</th><th>Action</th></tr></thead><tbody>{pageItems.map((reservation) => <tr key={reservation.id}>
                     <td><span className="member-table-book"><MemberBookThumbnail book={reservation.books} /><span><strong>{reservation.books?.title || 'Unknown book'}</strong><small>{reservation.books?.author || 'Unknown author'}</small></span></span></td>
                     <td>{formatDate(reservation.created_at)}</td>
-                    <td><StatusBadge value={reservation.status} /></td>
-                    <td>{reservation.status === 'waiting' ? `Position ${reservation.queue_position ?? 'pending'}` : reservation.book_copies?.barcode || 'Not assigned'}<small className="table-subtext">{reservation.pickup_expires_at ? `Collect by ${new Date(reservation.pickup_expires_at).toLocaleString()}` : ''}</small></td>
+                    <td><StatusBadge value={reservation.status} reservation={reservation} /></td>
+                    <td>{reservation.status === 'waiting'
+                      ? reservation.staff_approved_at ? `Position ${reservation.queue_position ?? 'pending'}` : 'Waiting for staff approval'
+                      : reservation.pickup_confirmed_at ? reservation.book_copies?.barcode || 'Copy assigned' : 'Staff verifying copy'}<small className="table-subtext">{reservation.pickup_confirmed_at && reservation.pickup_expires_at ? `Collect by ${new Date(reservation.pickup_expires_at).toLocaleString()}` : ''}</small></td>
                     <td>{['waiting', 'ready_for_pickup'].includes(reservation.status) ? <button type="button" className="table-action" onClick={() => setConfirmingReservation(reservation)} disabled={cancellingId === reservation.id}>{cancellingId === reservation.id ? 'Cancelling...' : 'Cancel'}</button> : <span className="muted">No action</span>}</td>
                   </tr>)}</tbody></table>}
         </div>
         {!loading && !loadError && filteredReservations.length > 0 && pagination}
       </section>
-      <p className="member-policy-note"><strong>Pickup holds and queue order:</strong> Available copies go to the earliest active request. If you are next, the copy is held until the pickup deadline; otherwise, your request waits in line.</p>
+      <p className="member-policy-note"><strong>Pickup holds and queue order:</strong> Library staff approve reservation requests. Approved requests are served in order; after a copy is assigned, staff verifies it before marking it ready and starting your pickup deadline.</p>
       <ConfirmDialog
         open={Boolean(confirmingReservation)}
         title="Cancel reservation?"
@@ -826,9 +821,8 @@ export function BookDetailsView({ bookId, role, onBack, onSignIn }) {
       const { error: reservationError } = await supabase.rpc('reserve_book', { p_book_id: book.id })
       if (reservationError) setError(describeReservationError(reservationError.message))
       else {
-        setBook((current) => current ? { ...current, book_copies: markFirstAvailableCopyReserved(current.book_copies || []) } : current)
         setReservationPlaced(true)
-        setMessage('Reservation request placed. Check My Reservations for your pickup status or queue position.')
+        setMessage('Request submitted. Library staff must approve it before a copy is held.')
       }
     } catch (reservationError) {
       if (import.meta.env.DEV) console.error('[book details] reservation failed', reservationError)
@@ -838,8 +832,8 @@ export function BookDetailsView({ bookId, role, onBack, onSignIn }) {
     }
   }
 
-  if (loading) return <section className="content-section"><button type="button" className="back-button" onClick={onBack}>Back to catalog</button><div className="empty-state loading-state">Loading book details...</div></section>
-  if (!book) return <section className="content-section"><button type="button" className="back-button" onClick={onBack}>Back to catalog</button><div className="inline-error" role="alert">This book could not be loaded. Please try again.</div></section>
+  if (loading) return <section className="content-section"><button type="button" className="catalog-detail-back-button" onClick={onBack}><span aria-hidden="true">←</span> Back to catalog</button><div className="empty-state loading-state">Loading book details...</div></section>
+  if (!book) return <section className="content-section"><button type="button" className="catalog-detail-back-button" onClick={onBack}><span aria-hidden="true">←</span> Back to catalog</button><div className="inline-error" role="alert">This book could not be loaded. Please try again.</div></section>
 
   const copies = book.book_copies ?? []
   const availableCopies = copies.filter((copy) => copy.status === 'available').length
@@ -849,15 +843,15 @@ export function BookDetailsView({ bookId, role, onBack, onSignIn }) {
 
   return (
     <section className="content-section">
-      <button type="button" className="back-button" onClick={onBack}>Back to catalog</button>
+      <button type="button" className="catalog-detail-back-button" onClick={onBack}><span aria-hidden="true">←</span> Back to catalog</button>
       {message && <div className="inline-success" role="status">{message}</div>}
       {error && <div className="inline-error" role="alert">{error}</div>}
       <article className="book-detail-card">
         <div className="book-detail-cover"><BookCover book={book} /></div>
-        <div className="book-detail-content"><span className={availableCopies > 0 ? 'availability available' : 'availability unavailable'}>{availableCopies > 0 ? 'Available' : 'Unavailable'}</span><h2>{book.title}</h2><p className="book-detail-author">{book.author}</p><p className="book-detail-description">{book.description || 'No description has been added to the catalog yet.'}</p><dl className="detail-list detail-list-wide"><div><dt>ISBN</dt><dd>{book.isbn || 'Not recorded'}</dd></div><div><dt>Course / subject</dt><dd>{book.course_subject || 'Not tagged'}</dd></div><div><dt>Category</dt><dd>{book.category || 'Uncategorized'}</dd></div><div><dt>Publication year</dt><dd>{book.publication_year || 'Not recorded'}</dd></div><div><dt>Total copies</dt><dd>{copies.length}</dd></div><div><dt>Available copies</dt><dd>{availableCopies}</dd></div><div><dt>Shelf location</dt><dd>{availableLocations.join(', ') || 'Ask at the circulation desk'}</dd></div></dl>{role === 'member' && canReserve && <><button className="primary-button detail-action" onClick={reserveBook} disabled={saving || reservationPlaced}>{saving ? 'Placing hold...' : reservationPlaced ? 'Hold placed' : 'Reserve for pickup'}</button><p className="requirement-note">Available copies are assigned in request order. If a copy is not ready for you, your reservation stays in the queue.</p></>}
+        <div className="book-detail-content"><span className={availableCopies > 0 ? 'availability available' : 'availability unavailable'}>{availableCopies > 0 ? 'Available' : 'Unavailable'}</span><h2>{book.title}</h2><p className="book-detail-author">{book.author}</p><p className="book-detail-description">{book.description || 'No description has been added to the catalog yet.'}</p><dl className="detail-list detail-list-wide"><div><dt>ISBN</dt><dd>{book.isbn || 'Not recorded'}</dd></div><div><dt>Course / subject</dt><dd>{book.course_subject || 'Not tagged'}</dd></div><div><dt>Category</dt><dd>{book.category || 'Uncategorized'}</dd></div><div><dt>Publication year</dt><dd>{book.publication_year || 'Not recorded'}</dd></div><div><dt>Total copies</dt><dd>{copies.length}</dd></div><div><dt>Available copies</dt><dd>{availableCopies}</dd></div><div><dt>Shelf location</dt><dd>{availableLocations.join(', ') || 'Ask at the circulation desk'}</dd></div></dl>{role === 'member' && canReserve && <><button className="primary-button detail-action" onClick={reserveBook} disabled={saving || reservationPlaced}>{saving ? 'Submitting...' : reservationPlaced ? 'Request submitted' : 'Reserve for pickup'}</button><p className="requirement-note">A librarian or administrator must approve your request and confirm the copy before it is marked ready for pickup.</p></>}
           {role === 'public' && copies.length > 0 && canReserve && <div className="requirement-note public-reservation-signin">
             <strong>Sign in to reserve this book</strong>
-            <p>Create a member account or sign in to request a pickup hold. Available copies are assigned in request order; if no copy is ready for you, your request joins the queue.</p>
+            <p>Create a member account or sign in to request a pickup hold. Staff approve each request and confirm the assigned copy before you are asked to collect it.</p>
             <button type="button" className="primary-button" onClick={onSignIn}>Sign in or create an account</button>
           </div>}
           {role === 'public' && copies.length > 0 && !canReserve && <p className="requirement-note">There are no usable copies to reserve online right now. Ask library staff for help.</p>}

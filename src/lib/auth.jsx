@@ -306,7 +306,7 @@ export function AuthProvider({ children }) {
               email: email.trim().toLowerCase(),
               password,
               options: {
-                emailRedirectTo: window.location.origin,
+                emailRedirectTo: import.meta.env.VITE_AUTH_REDIRECT_URL?.trim() || window.location.origin,
                 data: {
                   full_name: fullName.trim(),
                   registration_school_id: String(schoolId ?? '').trim().toUpperCase().replace(/\s+/g, ''),

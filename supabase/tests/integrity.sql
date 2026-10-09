@@ -88,10 +88,18 @@ set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000003';
 select public.test_denied($q$insert into public.reservations(book_id,member_id,status,created_at) values('20000000-0000-0000-0000-000000000001',auth.uid(),'ready_for_pickup','2000-01-01')$q$,'permission denied');
 select public.reserve_book('20000000-0000-0000-0000-000000000001') as linked_available_hold \gset
-select public.test_assert((select r.status='ready_for_pickup' and r.copy_id is not null
-  and r.pickup_expires_at>now() and c.status='reserved'
-  from public.reservations r join public.book_copies c on c.id=r.copy_id
-  where r.id=:'linked_available_hold'), 'a member can reserve an available copy for pickup');
+select public.test_assert((select r.status='waiting' and r.staff_approved_at is null
+  and r.copy_id is null and exists (select 1 from public.book_copies c where c.book_id=r.book_id and c.status='available')
+  from public.reservations r where r.id=:'linked_available_hold'), 'an available-copy request waits for staff approval before holding stock');
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
+select public.staff_approve_reservation_request(:'linked_available_hold');
+select public.test_assert((select status='ready_for_pickup' and staff_approved_at is not null
+  and pickup_confirmed_at is null and pickup_expires_at is null
+  from public.reservations where id=:'linked_available_hold'), 'approved request gets an assigned copy but is not yet reported ready');
+select public.staff_confirm_reservation_pickup(:'linked_available_hold');
+select public.test_assert((select pickup_confirmed_at is not null and pickup_expires_at>now()
+  from public.reservations where id=:'linked_available_hold'), 'staff confirmation is what starts the pickup deadline');
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000003';
 select public.cancel_reservation(:'linked_available_hold');
 select public.test_denied($q$select public.checkout_copy('10000000-0000-0000-0000-000000000001',auth.uid())$q$,'Only Librarians');
 select public.test_denied('select public.process_circulation()','permission denied');
@@ -148,10 +156,17 @@ select public.test_denied($q$select public.complete_member_account_registration(
 select public.test_assert((select p.school_id is null and m.school_id is null and m.library_card_number is null and m.email_only and m.auth_user_id=p.id from public.profiles p join public.library_members m on m.auth_user_id=p.id where p.id='00000000-0000-0000-0000-000000000008'),'email confirmation creates a separate email-only borrower record without linking an ID or card');
 select public.test_assert(public.current_user_has_active_library_member(),'email-confirmed account passes the member access gate');
 select public.reserve_book('20000000-0000-0000-0000-000000000006') as email_only_available_hold \gset
-select public.test_assert((select r.status='ready_for_pickup' and r.copy_id is not null
-  and r.pickup_expires_at>now() and c.status='reserved'
-  from public.reservations r join public.book_copies c on c.id=r.copy_id
-  where r.id=:'email_only_available_hold'), 'an email-only member can reserve an available copy for pickup');
+select public.test_assert((select r.status='waiting' and r.staff_approved_at is null and r.copy_id is null
+  and exists (select 1 from public.book_copies c where c.book_id=r.book_id and c.status='available')
+  from public.reservations r where r.id=:'email_only_available_hold'), 'email-only member request waits for staff approval before holding a copy');
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
+select public.staff_approve_reservation_request(:'email_only_available_hold');
+select public.test_assert((select status='ready_for_pickup' and pickup_confirmed_at is null and pickup_expires_at is null
+  from public.reservations where id=:'email_only_available_hold'), 'staff approval assigns a copy but does not yet tell the member to collect it');
+select public.staff_confirm_reservation_pickup(:'email_only_available_hold');
+select public.test_assert((select pickup_confirmed_at is not null and pickup_expires_at>now()
+  from public.reservations where id=:'email_only_available_hold'), 'staff pickup confirmation starts its deadline');
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000008';
 select public.cancel_reservation(:'email_only_available_hold');
 select public.test_denied($q$select public.reserve_book_by_card('CARD-SELF-SIGNUP','24681357','20000000-0000-0000-0000-000000000006')$q$,'permission denied');
 reset role;
@@ -184,7 +199,11 @@ reset role;
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
 select public.return_loan(:'card_hold_loan');
-select public.test_assert((select r.status='ready_for_pickup' and c.status='reserved' from public.reservations r join public.book_copies c on c.id=r.copy_id where r.member_id=:'walkin_member' and r.book_id='20000000-0000-0000-0000-000000000006'),'return assigns a physical copy to an accountless staff-created hold');
+select public.test_assert((select r.status='ready_for_pickup' and r.staff_approved_at is not null
+  and r.pickup_confirmed_at is null and r.pickup_expires_at is null and c.status='reserved'
+  from public.reservations r join public.book_copies c on c.id=r.copy_id
+  where r.member_id=:'walkin_member' and r.book_id='20000000-0000-0000-0000-000000000006'),'return assigns a copy to a staff-approved hold but does not confirm pickup readiness');
+select public.staff_confirm_reservation_pickup((select id from public.reservations where member_id=:'walkin_member' and book_id='20000000-0000-0000-0000-000000000006' and status='ready_for_pickup'));
 select public.test_assert((select count(*)=0 from public.notifications where member_id=:'walkin_member'),'accountless pickup notification does not violate profile-keyed notifications');
 reset role;
 set role anon;
@@ -242,13 +261,24 @@ select public.reserve_book('20000000-0000-0000-0000-000000000002') as hold2 \gse
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000005';
 select public.reserve_book('20000000-0000-0000-0000-000000000002') as hold3 \gset
 reset role;
+set role authenticated;
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000003';
+select public.test_denied(format('select public.staff_approve_reservation_request(%L)',:'hold1'),'Only Librarians');
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
+select public.staff_approve_reservation_request(:'hold1');
+select public.staff_approve_reservation_request(:'hold2');
+select public.staff_approve_reservation_request(:'hold3');
+select public.test_assert((select count(*)=3 from public.reservations where id in (:'hold1',:'hold2',:'hold3') and status='waiting' and staff_approved_at is not null),'staff approval is required before copies are assigned');
+reset role;
 update public.book_copies set status='available' where barcode like 'QUEUE-%';
-
-
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
 select public.promote_next_reservation('20000000-0000-0000-0000-000000000002');
 select copy_id as assigned2 from public.reservations where id=:'hold2' \gset
+select public.test_assert((select pickup_confirmed_at is null and pickup_expires_at is null from public.reservations where id=:'hold2'),'an assigned copy is not ready or expiring before staff confirmation');
+select public.test_denied(format('select public.checkout_copy(%L,%L)',:'assigned2','00000000-0000-0000-0000-000000000004'),'must confirm the copy is ready');
+select public.staff_confirm_reservation_pickup(:'hold2');
+select public.test_assert((select pickup_confirmed_at is not null and pickup_expires_at is not null from public.reservations where id=:'hold2'),'staff confirmation starts the pickup window');
 select public.test_denied(format('select public.checkout_copy(%L,%L)',:'assigned2','00000000-0000-0000-0000-000000000005'),'held');
 select public.checkout_copy(:'assigned2','00000000-0000-0000-0000-000000000004') as pickup_loan \gset
 select public.test_assert((select status='completed' from public.reservations where id=:'hold2'),'Second hold can check out first');
@@ -257,7 +287,11 @@ select public.test_denied(format('select public.cancel_reservation(%L)',:'hold1'
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000003';
 select public.cancel_reservation(:'hold1');
 reset role;
-select public.test_assert((select status='ready_for_pickup' from public.reservations where id=:'hold3'),'Cancellation reassigns copy');
+select public.test_assert((select status='ready_for_pickup' and pickup_confirmed_at is null and pickup_expires_at is null from public.reservations where id=:'hold3'),'Cancellation assigns the next copy but still requires staff confirmation');
+set role authenticated;
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
+select public.staff_confirm_reservation_pickup(:'hold3');
+reset role;
 update public.reservations set pickup_expires_at=now()-interval '1 second' where id=:'hold3';
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
@@ -320,6 +354,29 @@ set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
 select public.test_assert((select sum((day->>'returns')::integer)=4 from jsonb_array_elements(public.library_analytics(now()-interval '1 day',now()+interval '1 day')->'daily') day),'Analytics counts physical returns and excludes lost or damaged closures');
 select public.test_assert((public.transaction_history('damaged',0,1)->>'total')::integer=1,'Searchable closure audit');
 select public.test_assert(jsonb_array_length(public.transaction_history('',0,2)->'items')=2,'History is paginated');
+select public.test_assert(
+  (public.transaction_history(:'damaged_loan',0,6,'damaged','newest')->'items'->0->>'internal_copy_id')
+    = (select copy_id::text from public.loans where id=:'damaged_loan')
+  and (public.transaction_history(:'damaged_loan',0,6,'damaged','newest')->'items'->0->>'barcode')
+    = (select c.barcode from public.loans l join public.book_copies c on c.id=l.copy_id where l.id=:'damaged_loan'),
+  'Transaction history joins the linked physical copy and distinguishes barcode from internal ID'
+);
+select public.test_assert(
+  public.transaction_history('',0,6,'damaged','newest')->>'total'='1'
+  and jsonb_array_length(public.transaction_history('',0,6)->'items')<=6,
+  'Transaction action filtering and six-row page limits are enforced'
+);
+select public.test_assert(
+  (public.transaction_history(
+    (select entity_id::text from public.audit_logs
+      where entity_type='reservation' and action='cancel' and details->>'source'='card_pin'
+      order by created_at desc limit 1),
+    0,6,'cancel','newest')->'items'->0->>'actor_type')='member_self_service',
+  'Card/PIN cancellations are attributed to a self-service member, not staff'
+);
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000007';
+select public.test_assert(jsonb_typeof(public.transaction_history('',0,6)->'items')='array',
+  'Librarians can read transaction history under the existing staff permission');
 select public.test_denied('select public.scheduled_circulation()','permission denied');
 reset role;
 set role service_role;
@@ -339,6 +396,10 @@ set request.jwt.claim.sub='00000000-0000-0000-0000-000000000003';
 select public.reserve_book('20000000-0000-0000-0000-000000000002');
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000005';
 select public.reserve_book('20000000-0000-0000-0000-000000000002');
+reset role;
+set role authenticated;
+set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
+select public.staff_approve_reservation_request(id) from public.reservations where book_id='20000000-0000-0000-0000-000000000002' and status='waiting';
 reset role;
 update public.book_copies set status='available' where barcode like 'QUEUE-%';
 
@@ -441,8 +502,9 @@ select public.staff_create_reservation(
   null, null, current_date, null, null
 ) as available_walkin_reservation \gset
 select public.test_assert((select r.status='ready_for_pickup' and r.copy_id is not null and c.status='reserved'
+  and r.staff_approved_at is not null and r.pickup_confirmed_at is null and r.pickup_expires_at is null
   from public.reservations r join public.book_copies c on c.id=r.copy_id where r.id=:'available_walkin_reservation'),
-  'a walk-in reservation for an available title receives a real copy through the allocator');
+  'staff creation approves the walk-in request and assigns a copy, but still requires pickup confirmation');
 select copy_id as available_walkin_copy from public.reservations where id=:'available_walkin_reservation' \gset
 select public.staff_create_reservation(
   '20000000-0000-0000-0000-000000000009', null, 'visitor', 'Available Visitor Two', null,
@@ -453,6 +515,7 @@ select public.test_assert((select status='waiting' and copy_id is null from publ
   'an assigned physical copy is never assigned to a second active reservation');
 select public.cancel_reservation(:'available_walkin_reservation');
 select public.test_assert((select status='ready_for_pickup' and copy_id=:'available_walkin_copy'
+  and pickup_confirmed_at is null and pickup_expires_at is null
   from public.reservations where id=:'second_available_walkin_reservation'),
   'cancelling the first reservation assigns the released copy to the next borrower in FIFO order');
 select public.cancel_reservation(:'second_available_walkin_reservation');
@@ -475,6 +538,7 @@ select public.test_assert((select count(*)=1 and count(distinct copy_id)=1 from 
   where book_id='20000000-0000-0000-0000-000000000008' and status='ready_for_pickup'), 'the shared allocator assigns the only copy once');
 select public.cancel_reservation(:'registered_queue_reservation');
 select public.test_assert((select status='ready_for_pickup' and copy_id is not null from public.reservations where id=:'queued_walkin_reservation'), 'cancellation releases the copy to the next walk-in in FIFO order');
+select public.staff_confirm_reservation_pickup(:'queued_walkin_reservation');
 select public.test_denied(format('select public.checkout_copy(%L,%L)',
   (select copy_id from public.reservations where id=:'queued_walkin_reservation'), :'linked_member'), 'held for the next reservation');
 select public.test_denied(format('select public.staff_update_reservation(%L,%L,%L,%L,%L,NULL,NULL,NULL,current_date,NULL,NULL)',
@@ -499,6 +563,7 @@ update public.book_copies set status='available' where barcode='WALKIN-STAFF-COP
 set role authenticated;
 set request.jwt.claim.sub='00000000-0000-0000-0000-000000000001';
 select public.promote_next_reservation('20000000-0000-0000-0000-000000000007');
+select public.staff_confirm_reservation_pickup(:'expiring_walkin_reservation');
 reset role;
 update public.reservations set pickup_expires_at=now()-interval '1 second' where id=:'expiring_walkin_reservation';
 set role authenticated;

@@ -155,12 +155,12 @@ export function StaffMembers() {
       <article className="staff-summary-card"><span>Optional accounts linked</span><strong>{loading ? '—' : memberStats.accountLinked}</strong></article>
     </div>
     {(message || error) && <div className={error ? 'inline-error' : 'inline-success'} role={error ? 'alert' : 'status'}>{error || message}</div>}
-    <form className="tool-form" onSubmit={saveMember}>
+    <form className="tool-form member-registration-form" onSubmit={saveMember}>
       <h3>{editing ? 'Update library member' : 'Register a library member'}</h3>
       <div className="form-row three-column">
         <label>Full name<input value={draft.full_name} onChange={(event) => setDraft({ ...draft, full_name: event.target.value })} maxLength="160" required /></label>
         <label>Library card number<input value={draft.library_card_number} onChange={(event) => setDraft({ ...draft, library_card_number: event.target.value })} maxLength="100" required={!editing} /></label>
-        <label>School ID <span className="label-note">optional</span><input value={draft.school_id} onChange={(event) => setDraft({ ...draft, school_id: event.target.value })} maxLength="100" /></label>
+        <label><span className="member-form-label-copy">School ID <span className="label-note">optional</span></span><input value={draft.school_id} onChange={(event) => setDraft({ ...draft, school_id: event.target.value })} maxLength="100" /></label>
       </div>
       <div className="form-row three-column">
         <label>Member type<select value={draft.member_type} onChange={(event) => setDraft({ ...draft, member_type: event.target.value })}><option value="student">Student</option><option value="teacher">Teacher</option><option value="other">Other</option></select></label>

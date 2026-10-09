@@ -4,7 +4,6 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { fetchAllRows } from '../lib/paging'
 import { supabase } from '../lib/supabase'
 import { SHELF_LOCATIONS } from '../lib/shelf-locations'
-import { CameraBarcodeScanner } from './CameraBarcodeScanner'
 
 const requestStatuses = ['new', 'reviewing', 'ordered', 'acquired', 'declined']
 const requestTransitions = {
@@ -311,7 +310,7 @@ export function StaffInventoryAudit() {
         {audit.location_scope
           ? <p className="muted">Keep scanning copies from <strong>{audit.location_scope}</strong>. Most barcode scanners send Enter, which saves each scan automatically.</p>
           : <label>Shelf being checked<select value={selectedShelf} onChange={(event) => setSelectedShelf(event.target.value)} required><option value="">Select a shelf</option>{shelfOptions.map((shelf) => <option key={shelf} value={shelf}>{shelf}</option>)}</select></label>}
-        <div className="barcode-entry"><label htmlFor="inventory-audit-barcode">Copy barcode</label><div className="barcode-entry-controls"><input id="inventory-audit-barcode" value={barcode} onChange={(event) => setBarcode(event.target.value)} maxLength={100} required autoComplete="off" disabled={busy} placeholder="Scan barcode; scanner Enter saves it" /><CameraBarcodeScanner onScan={setBarcode} /></div></div>
+        <label>Copy barcode<input id="inventory-audit-barcode" value={barcode} onChange={(event) => setBarcode(event.target.value)} maxLength={100} required autoComplete="off" disabled={busy} placeholder="Type barcode" /></label>
         <button className="primary-button" disabled={busy || !barcode.trim()}>{busy ? 'Saving scan...' : 'Record scan'}</button>
       </form>
       {scopedItems.length === 0 ? <div className="empty-state">No copies are assigned to this shelf in the audit snapshot. Scanned barcodes will still be checked against the catalog.</div> : <div className="table-wrap">

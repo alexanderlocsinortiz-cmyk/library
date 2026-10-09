@@ -4,11 +4,18 @@ import { supabase } from '../lib/supabase'
 import { ConfirmDialog } from './ConfirmDialog'
 
 const statusLabels = {
-  waiting: 'Pending',
-  ready_for_pickup: 'Ready for Pickup',
+  waiting: 'Waiting',
+  ready_for_pickup: 'Staff verifying copy',
   completed: 'Completed',
   cancelled: 'Cancelled',
   expired: 'Expired',
+}
+const getReservationStatusLabel = (reservation) => {
+  if (reservation.status === 'waiting' && !reservation.staff_approved_at) return 'Pending staff approval'
+  if (reservation.status === 'waiting') return 'Waiting for available copy'
+  if (reservation.status === 'ready_for_pickup' && !reservation.pickup_confirmed_at) return 'Staff verifying copy'
+  if (reservation.status === 'ready_for_pickup') return 'Ready for Pickup'
+  return statusLabels[reservation.status] || reservation.status.replaceAll('_', ' ')
 }
 const borrowerTypes = [
   { value: 'student', label: 'Student' },
@@ -17,23 +24,23 @@ const borrowerTypes = [
   { value: 'visitor', label: 'Visitor' },
 ]
 const reservableCopyStatuses = new Set(['available', 'borrowed', 'overdue', 'reserved'])
+const approvalReservationSelect = 'id, book_id, member_id, borrower_type, borrower_full_name, student_employee_id, contact_number, email_address, reservation_date, expected_pickup_date, status, notes, created_by, created_at, updated_at, pickup_expires_at, staff_approved_at, staff_approved_by, pickup_confirmed_at, pickup_confirmed_by, copy_id, book_copies(barcode), books(title, author), member:library_members!reservations_member_id_fkey(full_name, library_card_number, email_only)'
 const todayValue = () => {
   const today = new Date()
   return today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0')
 }
 const dateValue = (value) => value ? String(value).slice(0, 10) : ''
+const isValidContactNumber = (value) => {
+  if (!value.trim()) return true
+  const digits = value.replace(/\D/g, '').length
+  return digits >= 7 && digits <= 15 && /^[0-9+().\s-]+$/.test(value)
+}
 const formatReservationDate = (value) => {
   if (!value) return '—'
   const date = new Date(String(value).length === 10 ? value + 'T00:00:00' : value)
   return Number.isNaN(date.getTime()) ? '—' : date.toLocaleDateString()
 }
-const borrowerTypeFromMember = (memberType) => ({
-  student: 'student',
-  teacher: 'faculty',
-  other: 'visitor',
-}[memberType] || 'visitor')
 const createEmptyDraft = () => ({
-  member_id: '',
   borrower_type: 'student',
   borrower_full_name: '',
   student_employee_id: '',
@@ -131,7 +138,6 @@ function ReservationBookPicker({ books, selectedBookId, onSelect, disabled = fal
 
 export function StaffReservations({ onBack }) {
   const [reservations, setReservations] = useState([])
-  const [members, setMembers] = useState([])
   const [books, setBooks] = useState([])
   const [filter, setFilter] = useState('active')
   const [borrowerTypeFilter, setBorrowerTypeFilter] = useState('all')
@@ -142,7 +148,6 @@ export function StaffReservations({ onBack }) {
   const [savingReservation, setSavingReservation] = useState(false)
   const [bookPickerResetKey, setBookPickerResetKey] = useState(0)
   const [draft, setDraft] = useState(createEmptyDraft)
-  const [memberSearch, setMemberSearch] = useState('')
   const [loadError, setLoadError] = useState('')
   const [actionError, setActionError] = useState('')
   const [message, setMessage] = useState('')
@@ -150,7 +155,6 @@ export function StaffReservations({ onBack }) {
   const [dialogReservation, setDialogReservation] = useState(null)
   const [dialogMode, setDialogMode] = useState('view')
   const [editDraft, setEditDraft] = useState(null)
-  const [editMemberSearch, setEditMemberSearch] = useState('')
 
   const loadReservations = async () => {
     if (!supabase) {
@@ -163,23 +167,16 @@ export function StaffReservations({ onBack }) {
     try {
       const { error: refreshError } = await supabase.rpc('refresh_circulation_statuses')
       if (refreshError) throw refreshError
-      const [reservationsResult, membersResult, booksResult] = await Promise.all([
-        fetchAllRows(() => supabase.from('reservations')
-          .select('id, book_id, member_id, borrower_type, borrower_full_name, student_employee_id, contact_number, email_address, reservation_date, expected_pickup_date, status, notes, created_by, created_at, updated_at, pickup_expires_at, copy_id, book_copies(barcode), books(title, author), member:library_members!reservations_member_id_fkey(full_name, library_card_number, email_only)')
-          .order('created_at', { ascending: true })),
-        fetchAllRows(() => supabase.from('library_members')
-          .select('id, full_name, library_card_number, school_id, member_type')
-          .eq('is_active', true)
-          .eq('email_only', false)
-          .order('full_name')),
-        fetchAllRows(() => supabase.from('books')
+      const booksRequest = fetchAllRows(() => supabase.from('books')
           .select('id, title, author, isbn, course_subject, book_copies(id, status)')
-          .order('title')),
-      ])
-      const failed = [reservationsResult, membersResult, booksResult].find((result) => result.error)
-      if (failed?.error) throw failed.error
+          .order('title'))
+      const reservationsResult = await fetchAllRows(() => supabase.from('reservations')
+        .select(approvalReservationSelect)
+        .order('created_at', { ascending: true }))
+      const booksResult = await booksRequest
+      if (booksResult.error) throw booksResult.error
+      if (reservationsResult.error) throw reservationsResult.error
       setReservations(reservationsResult.data ?? [])
-      setMembers(membersResult.data ?? [])
       setBooks((booksResult.data ?? []).map((book) => {
         const copies = book.book_copies ?? []
         return {
@@ -191,7 +188,9 @@ export function StaffReservations({ onBack }) {
       }))
     } catch (error) {
       if (import.meta.env.DEV) console.error('[staff reservations] load failed', error)
-      setLoadError('Unable to load reservations. Please try again.')
+      setLoadError(/staff_approved_at|staff_approved_by|pickup_confirmed_at|pickup_confirmed_by|schema cache/i.test(error.message || '')
+        ? 'Reservation approvals are not installed in the database yet. Apply migration 040 before managing reservations.'
+        : 'Unable to load reservations. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -211,42 +210,29 @@ export function StaffReservations({ onBack }) {
 
   const reservableBooks = books.filter((book) => book.has_reservable_inventory)
   const selectedBook = books.find((book) => book.id === draft.book_id)
-  const memberOptions = members.filter((member) =>
-    [member.full_name, member.school_id || '', member.library_card_number || ''].join(' ').toLowerCase().includes(memberSearch.trim().toLowerCase()))
 
   const clearForm = () => {
     setDraft(createEmptyDraft())
     setBookPickerResetKey((current) => current + 1)
-    setMemberSearch('')
     setActionError('')
     setMessage('')
   }
   const updateDraftField = (field, value) => {
-    setDraft((current) => ({
-      ...current,
-      [field]: value,
-      ...(field === 'borrower_type' || field === 'borrower_full_name' || field === 'student_employee_id' ? { member_id: '' } : {}),
-    }))
-  }
-  const chooseCreateMember = (memberId) => {
-    const member = members.find((item) => item.id === memberId)
-    if (!member) {
-      setDraft((current) => ({ ...current, member_id: '' }))
-      return
-    }
-    setDraft((current) => ({
-      ...current,
-      member_id: member.id,
-      borrower_type: borrowerTypeFromMember(member.member_type),
-      borrower_full_name: member.full_name,
-      student_employee_id: member.school_id || '',
-    }))
+    setDraft((current) => ({ ...current, [field]: value }))
   }
 
   const createReservation = async (event) => {
     event.preventDefault()
+    if (loadError) {
+      setActionError(loadError)
+      return
+    }
     if (!supabase || !draft.borrower_full_name.trim() || !draft.book_id || !draft.reservation_date) {
       setActionError('Enter the borrower name and select a book before saving.')
+      return
+    }
+    if (!isValidContactNumber(draft.contact_number)) {
+      setActionError('Enter a valid contact number with 7 to 15 digits, or leave it blank.')
       return
     }
     setSavingReservation(true)
@@ -255,7 +241,7 @@ export function StaffReservations({ onBack }) {
     try {
       const { error: saveError } = await supabase.rpc('staff_create_reservation', {
         p_book_id: draft.book_id,
-        p_member_id: draft.member_id || null,
+        p_member_id: null,
         p_borrower_type: draft.borrower_type,
         p_borrower_full_name: draft.borrower_full_name.trim(),
         p_student_employee_id: draft.student_employee_id.trim() || null,
@@ -266,10 +252,9 @@ export function StaffReservations({ onBack }) {
         p_notes: draft.notes.trim() || null,
       })
       if (saveError) throw saveError
-      setMessage('Book reservation created successfully.')
+      setMessage('Reservation created and approved by staff. Confirm the assigned copy is ready before pickup.')
       setDraft(createEmptyDraft())
       setBookPickerResetKey((current) => current + 1)
-      setMemberSearch('')
       await loadReservations()
     } catch (error) {
       if (import.meta.env.DEV) console.error('[staff reservations] create failed', error)
@@ -279,12 +264,9 @@ export function StaffReservations({ onBack }) {
     }
   }
 
-  const visibleMembers = (query) => members.filter((member) =>
-    [member.full_name, member.school_id || '', member.library_card_number || ''].join(' ').toLowerCase().includes(query.trim().toLowerCase()))
   const openReservation = (reservation, mode = 'view') => {
     setDialogReservation(reservation)
     setDialogMode(mode)
-    setEditMemberSearch('')
     if (mode === 'edit') {
       setEditDraft({
         member_id: reservation.member_id || '',
@@ -302,23 +284,17 @@ export function StaffReservations({ onBack }) {
       setEditDraft(null)
     }
   }
-  const chooseEditMember = (memberId) => {
-    const member = members.find((item) => item.id === memberId)
-    if (!member) {
-      setEditDraft((current) => ({ ...current, member_id: '' }))
-      return
-    }
-    setEditDraft((current) => ({
-      ...current,
-      member_id: member.id,
-      borrower_type: borrowerTypeFromMember(member.member_type),
-      borrower_full_name: member.full_name,
-      student_employee_id: member.school_id || '',
-    }))
-  }
   const saveEdit = async (event) => {
     event.preventDefault()
     if (!supabase || !dialogReservation || !editDraft) return
+    if (!editDraft.borrower_full_name.trim() || !editDraft.book_id || !editDraft.reservation_date) {
+      setActionError('Enter the borrower name, reservation date, and book before saving.')
+      return
+    }
+    if (!isValidContactNumber(editDraft.contact_number)) {
+      setActionError('Enter a valid contact number with 7 to 15 digits, or leave it blank.')
+      return
+    }
     setSavingId(dialogReservation.id)
     setActionError('')
     setMessage('')
@@ -358,17 +334,21 @@ export function StaffReservations({ onBack }) {
     try {
       let result
       if (action === 'cancel') result = await supabase.rpc('cancel_reservation', { p_reservation_id: reservation.id })
-      else if (action === 'ready') result = await supabase.rpc('promote_next_reservation', { p_book_id: reservation.book_id })
-      else {
-        if (!reservation.member_id || !reservation.copy_id) throw new Error('Link the walk-in borrower to an active library member before checkout.')
-        result = await supabase.rpc('checkout_copy', { p_copy_id: reservation.copy_id, p_member_id: reservation.member_id })
-      }
+      else if (action === 'approve') result = await supabase.rpc('staff_approve_reservation_request', { p_reservation_id: reservation.id })
+      else if (action === 'confirm_ready') result = await supabase.rpc('staff_confirm_reservation_pickup', { p_reservation_id: reservation.id })
+      else if (!reservation.copy_id) throw new Error('This reservation has no physical copy assigned yet.')
+      else if (reservation.member_id) result = await supabase.rpc('checkout_copy', { p_copy_id: reservation.copy_id, p_member_id: reservation.member_id })
+      else result = await supabase.rpc('staff_complete_walkin_reservation', { p_reservation_id: reservation.id })
       if (result.error) throw result.error
       setMessage(action === 'cancel'
         ? 'Reservation cancelled successfully.'
         : action === 'complete'
           ? 'Checkout completed and the reservation is now complete.'
-          : 'Reservation queue processed in request order.')
+        : action === 'approve'
+            ? 'Reservation approved. Any available copy was assigned for staff verification.'
+            : action === 'confirm_ready'
+              ? 'Copy confirmed. The member can now see the pickup deadline and notification.'
+              : 'Reservation queue processed in request order.')
       setPendingAction(null)
       await loadReservations()
     } catch (error) {
@@ -403,14 +383,7 @@ export function StaffReservations({ onBack }) {
   const lastItemNumber = Math.min(pageStart + pageSize, visible.length)
   const firstPageButton = Math.max(1, Math.min(activePage - 2, pageCount - 4))
   const pageButtons = Array.from({ length: Math.min(pageCount, 5) }, (_, index) => firstPageButton + index)
-  const queueHeadByBook = new Map()
-  reservations.filter((reservation) => reservation.status === 'waiting')
-    .slice().sort((left, right) => new Date(left.created_at) - new Date(right.created_at))
-    .forEach((reservation) => {
-      if (!queueHeadByBook.has(reservation.book_id)) queueHeadByBook.set(reservation.book_id, reservation.id)
-    })
   const clearFilters = () => { setSearch(''); setFilter('all'); setBorrowerTypeFilter('all') }
-  const activeMemberOptions = visibleMembers(editMemberSearch)
   const modalBookId = editDraft?.book_id || ''
   const isReadyEdit = dialogMode === 'edit' && dialogReservation?.status === 'ready_for_pickup'
 
@@ -424,8 +397,6 @@ export function StaffReservations({ onBack }) {
     <form className="tool-form reservation-create-card walkin-reservation-form" onSubmit={createReservation}>
       <div className="reservation-section-heading"><h3>Create Walk-In Reservation</h3><p>Enter the borrower&apos;s details and select the book they want to reserve.</p></div>
       <fieldset className="walkin-form-section"><legend>Borrower Information</legend><div className="walkin-form-grid">
-        <label>Find a registered member <span className="optional-field-mark">Optional</span><input type="search" value={memberSearch} onChange={(event) => setMemberSearch(event.target.value)} placeholder="Search by name, student ID, or card" aria-label="Search registered members" /></label>
-        <label>Registered member <span className="optional-field-mark">Optional</span><select value={draft.member_id} onChange={(event) => chooseCreateMember(event.target.value)} aria-label="Registered member"><option value="">Walk-in / no linked member</option>{memberOptions.map((member) => <option key={member.id} value={member.id}>{member.full_name}{member.school_id ? ' · ' + member.school_id : ''}</option>)}</select></label>
         <label>Borrower Type <span className="required-field-mark" aria-hidden="true">*</span><select value={draft.borrower_type} onChange={(event) => updateDraftField('borrower_type', event.target.value)} required aria-label="Borrower type">{borrowerTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label>
         <label>Full Name <span className="required-field-mark" aria-hidden="true">*</span><input value={draft.borrower_full_name} onChange={(event) => updateDraftField('borrower_full_name', event.target.value)} maxLength={160} autoComplete="name" required aria-label="Full name" /></label>
         <label>Student/Employee ID <span className="optional-field-mark">Optional</span><input value={draft.student_employee_id} onChange={(event) => updateDraftField('student_employee_id', event.target.value)} maxLength={100} aria-label="Student or employee ID" /></label>
@@ -435,13 +406,13 @@ export function StaffReservations({ onBack }) {
       <fieldset className="walkin-form-section"><legend>Book Information</legend><div className="walkin-form-grid book-information-grid">
         <ReservationBookPicker books={books} selectedBookId={draft.book_id} onSelect={(bookId) => setDraft((current) => ({ ...current, book_id: bookId }))} resetKey={bookPickerResetKey} />
         <label>Available Copies<input type="number" value={selectedBook ? selectedBook.available_copies : ''} readOnly placeholder="Select a book" aria-label="Available copies" /></label>
-        <label><span>Reservation Date <span className="required-field-mark" aria-hidden="true">*</span></span><input type="date" value={draft.reservation_date} max={todayValue()} onChange={(event) => setDraft((current) => ({ ...current, reservation_date: event.target.value }))} required aria-label="Reservation date" /></label>
+        <label><span>Reservation Date <span className="required-field-mark" aria-hidden="true">*</span></span><input type="date" value={draft.reservation_date} max={todayValue()} onChange={(event) => setDraft((current) => ({ ...current, reservation_date: event.target.value, expected_pickup_date: current.expected_pickup_date && current.expected_pickup_date < event.target.value ? '' : current.expected_pickup_date }))} required aria-label="Reservation date" /></label>
         <label>Expected Pickup Date <span className="optional-field-mark">Optional</span><input type="date" value={draft.expected_pickup_date} min={draft.reservation_date} onChange={(event) => setDraft((current) => ({ ...current, expected_pickup_date: event.target.value }))} aria-label="Expected pickup date" /></label>
         <label className="walkin-notes-field">Notes <span className="optional-field-mark">Optional</span><textarea value={draft.notes} onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))} maxLength={2000} rows={2} aria-label="Reservation notes" /></label>
       </div></fieldset>
       <div className="walkin-form-footer"><p>Walk-in reservations can be created without a library account.</p><div>
         <button type="button" className="secondary-button" onClick={clearForm} disabled={savingReservation}>Clear Form</button>
-        <button type="submit" className="primary-button" disabled={savingReservation || loading || !draft.borrower_full_name.trim() || !draft.book_id || !draft.reservation_date}>{savingReservation ? 'Saving reservation...' : 'Save Reservation'}</button>
+        <button type="submit" className="primary-button" disabled={savingReservation || loading || Boolean(loadError) || !draft.borrower_full_name.trim() || !draft.book_id || !draft.reservation_date}>{savingReservation ? 'Saving reservation...' : 'Save Reservation'}</button>
       </div></div>
       {!loading && reservableBooks.length === 0 && books.length > 0 && <small className="reservation-form-empty-help">No titles have an available or circulating physical copy. Register or check in a physical copy to enable reservations.</small>}
       {!loading && books.length === 0 && <small className="reservation-form-empty-help">No book titles are currently listed in the catalog.</small>}
@@ -461,20 +432,19 @@ export function StaffReservations({ onBack }) {
         <thead><tr><th>Borrower Name</th><th>Borrower Type</th><th>Book Title</th><th>Reservation Date</th><th>Pickup Date</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>{pageItems.map((reservation) => {
           const borrowerName = reservation.borrower_full_name || reservation.member?.full_name || 'Unknown borrower'
-          const firstInQueue = queueHeadByBook.get(reservation.book_id) === reservation.id
-          const reservationBook = books.find((book) => book.id === reservation.book_id)
           return <tr key={reservation.id}>
             <td><strong>{borrowerName}</strong><small className="table-subtext">{reservation.member?.email_only ? `Confirmed email: ${reservation.email_address || 'not recorded'}; student status not verified` : reservation.student_employee_id || reservation.contact_number || reservation.email_address || ''}</small></td>
             <td><span className="reservation-borrower-type">{borrowerTypes.find((type) => type.value === reservation.borrower_type)?.label || 'Visitor'}</span></td>
-            <td><strong>{reservation.books?.title || 'Unknown book'}</strong><small className="table-subtext">{reservation.books?.author || ''}</small>{reservation.book_copies?.barcode && <small className="table-subtext">Copy {reservation.book_copies.barcode}</small>}{reservation.member_id && <small className="table-subtext">Registered library member</small>}</td>
+            <td><strong>{reservation.books?.title || 'Unknown book'}</strong><small className="table-subtext">{reservation.books?.author || ''}</small>{reservation.book_copies?.barcode && <small className="table-subtext">Copy {reservation.book_copies.barcode}</small>}</td>
             <td>{formatReservationDate(reservation.reservation_date || reservation.created_at)}</td>
             <td>{reservation.expected_pickup_date ? formatReservationDate(reservation.expected_pickup_date) : '—'}{reservation.pickup_expires_at && <small className="table-subtext">Pickup deadline {formatReservationDate(reservation.pickup_expires_at)}</small>}</td>
-            <td><span className="table-status reservation-status-badge" data-status={reservation.status}>{statusLabels[reservation.status] || reservation.status.replaceAll('_', ' ')}</span></td>
+            <td><span className="table-status reservation-status-badge" data-status={reservation.status}>{getReservationStatusLabel(reservation)}</span></td>
             <td><div className="reservation-row-actions">
               <button type="button" className="reservation-row-action" aria-label={'View details for ' + borrowerName} onClick={() => openReservation(reservation, 'view')}>View Details</button>
               {['waiting', 'ready_for_pickup'].includes(reservation.status) && <button type="button" className="reservation-row-action" aria-label={'Edit reservation for ' + borrowerName} onClick={() => openReservation(reservation, 'edit')}>Edit</button>}
-              {reservation.status === 'waiting' && firstInQueue && <button type="button" className="reservation-row-action" onClick={() => setPendingAction({ reservation, action: 'ready' })} disabled={!reservationBook || reservationBook.available_copies === 0}>Mark Ready for Pickup</button>}
-              {reservation.status === 'ready_for_pickup' && <button type="button" className="reservation-row-action" onClick={() => setPendingAction({ reservation, action: 'complete' })} disabled={!reservation.member_id || !reservation.copy_id} title={!reservation.member_id ? 'Link this reservation to an active library account before checkout.' : undefined}>Complete Reservation</button>}
+              {reservation.status === 'waiting' && !reservation.staff_approved_at && <button type="button" className="reservation-row-action" onClick={() => setPendingAction({ reservation, action: 'approve' })}>Approve Request</button>}
+              {reservation.status === 'ready_for_pickup' && !reservation.pickup_confirmed_at && <button type="button" className="reservation-row-action" onClick={() => setPendingAction({ reservation, action: 'confirm_ready' })} disabled={!reservation.copy_id} title={!reservation.copy_id ? 'A physical copy must be assigned before pickup can be confirmed.' : undefined}>Confirm Copy Ready</button>}
+              {reservation.status === 'ready_for_pickup' && reservation.pickup_confirmed_at && <button type="button" className="reservation-row-action" onClick={() => setPendingAction({ reservation, action: 'complete' })} disabled={!reservation.copy_id} title={!reservation.copy_id ? 'A physical copy must be assigned before checkout.' : undefined}>Complete Reservation</button>}
               {['waiting', 'ready_for_pickup'].includes(reservation.status) && <button type="button" className="reservation-row-action danger" onClick={() => setPendingAction({ reservation, action: 'cancel' })}>Cancel Reservation</button>}
             </div></td>
           </tr>
@@ -489,7 +459,7 @@ export function StaffReservations({ onBack }) {
 
     <aside className="reservation-rules-note walkin-rules-note">
       <span className="reservation-rules-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21z" /><path d="M4 5.5v15M8 7h8M8 10h7" /></svg></span>
-      <div><strong>How Book Reservations Work</strong><p>Requests share one first-come, first-served queue. When a copy becomes available, staff can assign it to the next borrower. A reservation is completed through checkout; walk-in checkouts still need an active library member record with a verified card.</p></div>
+      <div><strong>How Book Reservations Work</strong><p>Member requests need staff approval. Staff-created walk-in reservations are approved by the staff member who creates them. Approved requests are served in first-come, first-served order; staff must verify the assigned copy is physically present and usable before the member receives a pickup deadline. At pickup, staff records the checkout; a walk-in borrower does not need an account or library card.</p></div>
     </aside>
 
     {dialogReservation && <div className="reservation-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setDialogReservation(null); setEditDraft(null) } }}>
@@ -504,25 +474,24 @@ export function StaffReservations({ onBack }) {
           <div><span>Book</span><strong>{dialogReservation.books?.title || 'Unknown book'}</strong></div>
           <div><span>Reservation date</span><strong>{formatReservationDate(dialogReservation.reservation_date || dialogReservation.created_at)}</strong></div>
           <div><span>Expected pickup</span><strong>{formatReservationDate(dialogReservation.expected_pickup_date)}</strong></div>
-          <div><span>Status</span><strong>{statusLabels[dialogReservation.status] || dialogReservation.status}</strong></div>
+          <div><span>Status</span><strong>{getReservationStatusLabel(dialogReservation)}</strong></div>
           <div><span>Assigned copy</span><strong>{dialogReservation.book_copies?.barcode || 'Not assigned'}</strong></div>
+          <div><span>Staff approval</span><strong>{dialogReservation.staff_approved_at ? formatReservationDate(dialogReservation.staff_approved_at) : 'Pending'}</strong></div>
+          <div><span>Pickup confirmation</span><strong>{dialogReservation.pickup_confirmed_at ? formatReservationDate(dialogReservation.pickup_confirmed_at) : 'Pending'}</strong></div>
           <div className="reservation-detail-notes"><span>Notes</span><strong>{dialogReservation.notes || '—'}</strong></div>
         </div>}
         {dialogMode === 'edit' && editDraft && <form className="reservation-edit-form" onSubmit={saveEdit}>
           <div className="walkin-form-grid">
-            <label>Find a registered member <span className="optional-field-mark">Optional</span><input type="search" value={editMemberSearch} onChange={(event) => setEditMemberSearch(event.target.value)} placeholder="Search by name, student ID, or card" aria-label="Search registered members for edit" /></label>
-            <label>Registered member <span className="optional-field-mark">Optional</span><select value={editDraft.member_id} onChange={(event) => chooseEditMember(event.target.value)} aria-label="Registered member for edit" disabled={isReadyEdit && Boolean(dialogReservation.member_id)}><option value="">Walk-in / no linked member</option>{activeMemberOptions.map((member) => <option key={member.id} value={member.id}>{member.full_name}{member.school_id ? ' · ' + member.school_id : ''}</option>)}</select></label>
             <label>Borrower Type<select value={editDraft.borrower_type} onChange={(event) => setEditDraft((current) => ({ ...current, borrower_type: event.target.value, member_id: '' }))} disabled={isReadyEdit}>{borrowerTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></label>
             <label>Full Name<input value={editDraft.borrower_full_name} onChange={(event) => setEditDraft((current) => ({ ...current, borrower_full_name: event.target.value, member_id: '' }))} maxLength={160} required disabled={isReadyEdit} /></label>
             <label>Student/Employee ID<input value={editDraft.student_employee_id} onChange={(event) => setEditDraft((current) => ({ ...current, student_employee_id: event.target.value, member_id: '' }))} maxLength={100} disabled={isReadyEdit} /></label>
             <label>Contact Number<input type="tel" value={editDraft.contact_number} onChange={(event) => setEditDraft((current) => ({ ...current, contact_number: event.target.value }))} maxLength={40} /></label>
             <label>Email Address<input type="email" value={editDraft.email_address} onChange={(event) => setEditDraft((current) => ({ ...current, email_address: event.target.value }))} maxLength={254} /></label>
             <ReservationBookPicker books={books} selectedBookId={modalBookId} onSelect={(bookId) => setEditDraft((current) => ({ ...current, book_id: bookId }))} disabled={isReadyEdit} label="Select Book" />
-            <label>Reservation Date<input type="date" value={editDraft.reservation_date} max={todayValue()} onChange={(event) => setEditDraft((current) => ({ ...current, reservation_date: event.target.value }))} required /></label>
+            <label>Reservation Date<input type="date" value={editDraft.reservation_date} max={todayValue()} onChange={(event) => setEditDraft((current) => ({ ...current, reservation_date: event.target.value, expected_pickup_date: current.expected_pickup_date && current.expected_pickup_date < event.target.value ? '' : current.expected_pickup_date }))} required /></label>
             <label>Expected Pickup Date<input type="date" value={editDraft.expected_pickup_date} min={editDraft.reservation_date} onChange={(event) => setEditDraft((current) => ({ ...current, expected_pickup_date: event.target.value }))} /></label>
             <label className="walkin-notes-field">Notes<textarea value={editDraft.notes} onChange={(event) => setEditDraft((current) => ({ ...current, notes: event.target.value }))} maxLength={2000} rows={2} /></label>
           </div>
-          {isReadyEdit && !dialogReservation.member_id && <small className="form-helper">To check out this walk-in hold, select an active member whose name and ID match the reservation.</small>}
           <footer><button type="button" className="secondary-button" onClick={() => { setDialogReservation(null); setEditDraft(null) }} disabled={savingId === dialogReservation.id}>Cancel</button><button type="submit" className="primary-button" disabled={savingId === dialogReservation.id || !editDraft.borrower_full_name.trim() || !editDraft.book_id}>{savingId === dialogReservation.id ? 'Saving...' : 'Save Changes'}</button></footer>
         </form>}
         {dialogMode === 'view' && <footer className="reservation-detail-footer"><button type="button" className="secondary-button" onClick={() => setDialogReservation(null)}>Close</button>{['waiting', 'ready_for_pickup'].includes(dialogReservation.status) && <button type="button" className="primary-button" onClick={() => openReservation(dialogReservation, 'edit')}>Edit Reservation</button>}</footer>}
@@ -531,13 +500,17 @@ export function StaffReservations({ onBack }) {
 
     <ConfirmDialog
       open={Boolean(pendingAction)}
-      title={pendingAction?.action === 'cancel' ? 'Cancel this reservation?' : pendingAction?.action === 'complete' ? 'Check out this reservation?' : 'Process the reservation queue?'}
+      title={pendingAction?.action === 'cancel' ? 'Cancel this reservation?' : pendingAction?.action === 'complete' ? 'Check out this reservation?' : pendingAction?.action === 'approve' ? 'Approve this reservation request?' : 'Confirm this copy is ready?'}
       description={pendingAction?.action === 'cancel'
         ? 'The reservation will be cancelled and any assigned copy returned to the next eligible borrower.'
         : pendingAction?.action === 'complete'
-          ? 'This uses the normal checkout process. The reservation is completed only if checkout succeeds.'
-          : 'Available copies will be assigned to eligible borrowers in first-come-first-served order.'}
-      confirmLabel={pendingAction?.action === 'cancel' ? 'Cancel Reservation' : pendingAction?.action === 'complete' ? 'Complete Reservation' : 'Mark Ready for Pickup'}
+          ? pendingAction.reservation.member_id
+            ? 'This uses the normal checkout process. The reservation is completed only if checkout succeeds.'
+            : 'This records the walk-in borrower in circulation history and checks out the assigned copy. It does not create an online account or library card.'
+          : pendingAction?.action === 'approve'
+            ? 'This request joins the staff-approved queue. If a copy is available, the system assigns it for staff verification; the member will not be told to collect it yet.'
+          : 'Confirm the assigned physical copy is present and in usable condition. This starts the pickup deadline and tells the member it is ready.'}
+      confirmLabel={pendingAction?.action === 'cancel' ? 'Cancel Reservation' : pendingAction?.action === 'complete' ? 'Complete Reservation' : pendingAction?.action === 'approve' ? 'Approve Request' : 'Confirm Copy Ready'}
       danger={pendingAction?.action === 'cancel'}
       busy={Boolean(pendingAction && savingId === pendingAction.reservation.id)}
       onCancel={() => setPendingAction(null)}

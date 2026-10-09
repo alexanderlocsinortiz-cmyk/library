@@ -971,11 +971,11 @@ function DashboardOverview({ userId, displayName, onOpenFeatures, onOpenSection,
     try {
       const [memberLoans, memberReservations, positionsResult, recentLoans, recentReturns, recentReservations, recentCatalog, policyResult] = await Promise.all([
         fetchAllRows(() => supabase.from('loans').select('id, status, due_at, checked_out_at, returned_at, renewal_count, fine_amount, book_copies(barcode, books(id, title, author, isbn, category, cover_url, cover_image_path))').in('status', ['borrowed', 'overdue']).order('created_at', { ascending: false })),
-        fetchAllRows(() => supabase.from('reservations').select('id, status, created_at, updated_at, pickup_expires_at, book_copies(barcode), books(id, title, author, isbn, cover_url, cover_image_path)').in('status', ['waiting', 'ready_for_pickup']).order('created_at', { ascending: false })),
+        fetchAllRows(() => supabase.from('reservations').select('id, status, created_at, updated_at, pickup_expires_at, staff_approved_at, pickup_confirmed_at, book_copies(barcode), books(id, title, author, isbn, cover_url, cover_image_path)').in('status', ['waiting', 'ready_for_pickup']).order('created_at', { ascending: false })),
         supabase.rpc('my_reservation_positions'),
         supabase.from('loans').select('id, status, created_at, due_at, returned_at, book_copies(books(title))').in('status', ['borrowed', 'overdue', 'lost', 'damaged']).order('created_at', { ascending: false }).limit(10),
         supabase.from('loans').select('id, status, created_at, returned_at, book_copies(books(title))').not('returned_at', 'is', null).order('returned_at', { ascending: false }).limit(10),
-        supabase.from('reservations').select('id, status, created_at, updated_at, books(title)').order('updated_at', { ascending: false }).limit(10),
+        supabase.from('reservations').select('id, status, created_at, updated_at, pickup_confirmed_at, books(title)').order('updated_at', { ascending: false }).limit(10),
         supabase.from('books').select('id, title, author, isbn, category, cover_url, cover_image_path, created_at, book_copies(status)').order('created_at', { ascending: false }).limit(5),
         supabase.rpc('get_circulation_policy'),
       ])
@@ -1017,7 +1017,7 @@ function DashboardOverview({ userId, displayName, onOpenFeatures, onOpenSection,
           const eventDate = reservation.status === 'waiting' ? reservation.created_at : reservation.updated_at || reservation.created_at
           const descriptions = {
             waiting: `Reserved ${title}`,
-            ready_for_pickup: `${title} is ready for pickup`,
+            ready_for_pickup: reservation.pickup_confirmed_at ? `${title} is ready for pickup` : `Staff is verifying ${title}`,
             completed: `Picked up ${title}`,
             cancelled: `Cancelled reservation for ${title}`,
             expired: `Reservation expired for ${title}`,
@@ -1127,9 +1127,12 @@ function DashboardOverview({ userId, displayName, onOpenFeatures, onOpenSection,
                 : <div className="member-dashboard-record-list">{reservations.map((reservation) => {
                   const book = reservation.books
                   const canCancel = ['waiting', 'ready_for_pickup'].includes(reservation.status)
+                  const reservationProgress = reservation.status === 'waiting'
+                    ? reservation.staff_approved_at ? `Queue position ${reservation.queue_position ?? 'pending'}` : 'Awaiting staff approval'
+                    : reservation.pickup_confirmed_at ? `Collect by ${formatDashboardDate(reservation.pickup_expires_at)}` : 'Staff is verifying the assigned copy'
                   return <article className="member-dashboard-record" key={reservation.id}>
                     <BookCoverArt book={book} className="member-dashboard-cover" externalLookup />
-                    <div className="member-dashboard-record-copy"><strong title={book?.title}>{book?.title || 'Unknown book'}</strong><small>{book?.author || 'Author not recorded'}</small><span>Requested {formatDashboardDate(reservation.created_at)}</span><span>{reservation.status === 'waiting' ? `Queue position ${reservation.queue_position ?? 'pending'}` : reservation.pickup_expires_at ? `Collect by ${formatDashboardDate(reservation.pickup_expires_at)}` : 'Pickup details pending'}</span><StatusBadgeForDashboard status={reservation.status} /></div>
+                    <div className="member-dashboard-record-copy"><strong title={book?.title}>{book?.title || 'Unknown book'}</strong><small>{book?.author || 'Author not recorded'}</small><span>Requested {formatDashboardDate(reservation.created_at)}</span><span>{reservationProgress}</span><StatusBadgeForDashboard status={reservation.status} reservation={reservation} /></div>
                     <div className="member-dashboard-record-actions"><button type="button" className="member-dashboard-details-button" onClick={() => setSelectedRecord({ kind: 'reservation', record: reservation, status: reservation.status })}>View Details</button>{canCancel && <button type="button" className="member-dashboard-cancel-button" onClick={() => void cancelReservation(reservation.id)} disabled={cancellingId === reservation.id}>{cancellingId === reservation.id ? 'Cancelling...' : 'Cancel'}</button>}</div>
                   </article>
                 })}</div>}
@@ -1164,8 +1167,13 @@ function DashboardOverview({ userId, displayName, onOpenFeatures, onOpenSection,
   )
 }
 
-function StatusBadgeForDashboard({ status }) {
-  const label = ({ 'due-soon': 'Due soon', ready_for_pickup: 'Ready for pickup' })[status] || String(status || 'Unknown').replaceAll('_', ' ')
+function StatusBadgeForDashboard({ status, reservation }) {
+  const reservationLabel = reservation?.status === 'waiting'
+    ? reservation.staff_approved_at ? 'Waiting for a copy' : 'Pending staff approval'
+    : reservation?.status === 'ready_for_pickup'
+      ? reservation.pickup_confirmed_at ? 'Ready for pickup' : 'Staff verifying copy'
+      : null
+  const label = reservationLabel || ({ 'due-soon': 'Due soon', ready_for_pickup: 'Ready for pickup' })[status] || String(status || 'Unknown').replaceAll('_', ' ')
   const danger = ['overdue', 'lost', 'damaged'].includes(status)
   const warning = ['due-soon', 'ready_for_pickup'].includes(status)
   return <span className={danger ? 'table-status danger' : warning ? 'table-status warning' : 'table-status'} data-status={status}>{label}</span>
@@ -1180,10 +1188,10 @@ function MemberDashboardDetailsDialog({ selection, onClose }) {
   return <div className="member-details-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
     <section className="member-details-dialog" role="dialog" aria-modal="true" aria-labelledby="member-details-title">
       <header><div><span className="eyebrow">{isLoan ? 'Borrowing record' : 'Reservation record'}</span><h2 id="member-details-title">{title}</h2></div><button type="button" className="member-details-close" aria-label="Close details" onClick={onClose}>&times;</button></header>
-      <div className="member-details-book"><BookCoverArt book={book} className="member-dashboard-cover" externalLookup /><div><strong>{book?.title || 'Unknown book'}</strong><span>{book?.author || 'Author not recorded'}</span><StatusBadgeForDashboard status={status} /></div></div>
+      <div className="member-details-book"><BookCoverArt book={book} className="member-dashboard-cover" externalLookup /><div><strong>{book?.title || 'Unknown book'}</strong><span>{book?.author || 'Author not recorded'}</span><StatusBadgeForDashboard status={status} reservation={!isLoan ? record : undefined} /></div></div>
       <dl className="member-details-grid">
         {isLoan ? <><div><dt>Borrowed</dt><dd>{formatDashboardDate(record.checked_out_at)}</dd></div><div><dt>Due date</dt><dd>{formatDashboardDate(record.due_at)}</dd></div><div><dt>Remaining time</dt><dd>{(() => { const dueTime = Date.parse(record.due_at || ''); if (!Number.isFinite(dueTime)) return 'Not recorded'; const days = Math.max(1, Math.ceil(Math.abs(dueTime - Date.now()) / 86400000)); return dueTime < Date.now() ? `${days} ${days === 1 ? 'day' : 'days'} overdue` : `${days} ${days === 1 ? 'day' : 'days'} left` })()}</dd></div><div><dt>Copy barcode</dt><dd>{record.book_copies?.barcode || 'Not recorded'}</dd></div><div><dt>Fine</dt><dd>{formatFine(record.fine_amount)}</dd></div></>
-          : <><div><dt>Reserved</dt><dd>{formatDashboardDateTime(record.created_at)}</dd></div><div><dt>Queue position</dt><dd>{record.status === 'waiting' ? record.queue_position ?? 'Pending' : 'Not waiting'}</dd></div><div><dt>Assigned copy</dt><dd>{record.book_copies?.barcode || 'Not assigned'}</dd></div><div><dt>Pickup deadline</dt><dd>{record.pickup_expires_at ? formatDashboardDateTime(record.pickup_expires_at) : 'Not set'}</dd></div></>}
+          : <><div><dt>Reserved</dt><dd>{formatDashboardDateTime(record.created_at)}</dd></div><div><dt>Queue position</dt><dd>{record.status === 'waiting' ? record.staff_approved_at ? record.queue_position ?? 'In queue' : 'Pending staff approval' : 'Not waiting'}</dd></div><div><dt>Assigned copy</dt><dd>{record.pickup_confirmed_at ? record.book_copies?.barcode || 'Copy assigned' : record.status === 'ready_for_pickup' ? 'Staff verifying copy' : 'Not assigned'}</dd></div><div><dt>Pickup deadline</dt><dd>{record.pickup_confirmed_at && record.pickup_expires_at ? formatDashboardDateTime(record.pickup_expires_at) : 'Not set'}</dd></div></>}
       </dl>
       <footer><button type="button" className="secondary-button" onClick={onClose}>Close</button></footer>
     </section>

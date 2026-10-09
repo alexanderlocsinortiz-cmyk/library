@@ -10,7 +10,7 @@ Copy-Item .env.example .env.local
 npm run dev
 ```
 
-Add the Supabase project URL and publishable key to `.env.local`.
+Add the Supabase project URL and publishable key to `.env.local`. For deployed builds, set `VITE_AUTH_REDIRECT_URL` to the deployed site's origin so confirmation links return there. Leave it blank locally to use the current browser origin. Add the deployed origin to Supabase Auth's allowed redirect URLs and set it as the Auth Site URL.
 
 Anyone creating an online member account registers with a name, email, School ID, and password, then confirms control of that email through a Supabase link. The School ID is saved as registration information only; it is not checked against student or library records. No library card, PIN, or staff review is required for signup. Email confirmation does not prove student status; each account gets a separate email-only borrower record and does not inherit an existing member's loans or reservations. LMS identity matching can be added later. Staff still records physical checkouts and returns at the library desk, and member self-registration cannot create staff roles.
 

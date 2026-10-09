@@ -53,6 +53,7 @@ beforeEach(() => {
       select: () => query,
       in: () => query,
       eq: () => query,
+      not: () => query,
       order: async () => ({ data: mock.data[table] || [], error: null }),
       single: async () => mock.single,
     }
@@ -102,12 +103,12 @@ describe('StaffCirculation', () => {
     expect(within(dialog).getByText('Member One')).toBeInTheDocument()
   })
 
-  it('uses scanned card and copy barcodes, then calls the existing checkout RPC', async () => {
+  it('uses manually entered card and copy barcodes, then calls the existing checkout RPC', async () => {
     render(<StaffCirculation />)
     await screen.findByText('Active members')
 
     fireEvent.change(screen.getByRole('searchbox', { name: 'Find member by name, card, or School ID' }), { target: { value: 'CARD-001' } })
-    fireEvent.change(screen.getByRole('textbox', { name: 'Scan or enter copy barcode' }), { target: { value: 'copy-001' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Enter copy barcode' }), { target: { value: 'copy-001' } })
     expect(screen.getByText('Computer Networks')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Check Out Book' }))
 
@@ -115,7 +116,7 @@ describe('StaffCirculation', () => {
     expect(mock.rpc).toHaveBeenCalledWith('checkout_copy', { p_copy_id: 'copy-1', p_member_id: 'member-1' })
   })
 
-  it('matches a scanned return barcode and calls the existing return RPC', async () => {
+  it('matches a manually entered return barcode and calls the existing return RPC', async () => {
     render(<StaffCirculation />)
     await screen.findByText('Book 0')
 

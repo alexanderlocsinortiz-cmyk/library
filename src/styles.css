@@ -105,6 +105,9 @@ code { background: #f7e6e4; border-radius: .3rem; padding: .15rem .35rem; font-s
 .section-heading h2 { margin: .5rem 0 .3rem; font-size: clamp(2.4rem, 5vw, 4.4rem); letter-spacing: -.06em; }
 .back-button { display: block; width: fit-content; border: 0; padding: 0; margin-bottom: .75rem; background: transparent; color: #a40000; font-weight: 700; }
 .back-button:hover { text-decoration: underline; }
+.catalog-detail-back-button { display: inline-flex; align-items: center; gap: .5rem; width: fit-content; margin: 0 0 1rem; padding: .55rem .85rem; border: 1px solid #dce4e9; border-radius: .65rem; background: #fff; color: var(--academic-red-dark); font: inherit; font-weight: 700; cursor: pointer; transition: border-color .15s ease, background-color .15s ease, transform .15s ease; }
+.catalog-detail-back-button:hover { border-color: #d9aeb3; background: #fff7f8; transform: translateY(-1px); }
+.catalog-detail-back-button:focus-visible { outline: 3px solid rgba(164, 0, 0, .22); outline-offset: 2px; }
 .feature-grid, .report-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .feature-card { position: relative; min-height: 15rem; display: flex; flex-direction: column; background: #fff; border: 1px solid #e1e7ea; border-radius: 1rem; padding: 1.5rem; overflow: hidden; }
 .feature-card::before { content: ""; position: absolute; top: 0; left: 0; width: .35rem; height: 100%; background: #a40000; }
@@ -4054,6 +4057,8 @@ tbody tr:hover {
 .member-details-dialog > footer { display: flex; justify-content: flex-end; margin-top: .75rem; }
 
 .member-page { min-width: 0; }
+.member-registration-form .member-form-label-copy { display: flex; align-items: baseline; gap: .28rem; }
+.member-registration-form .member-form-label-copy .label-note { white-space: nowrap; }
 .member-page-header { align-items: center; margin-bottom: .85rem; padding: .8rem 1rem; }
 .member-page-header .book-page-header-copy h2 { font-size: clamp(1.35rem, 2vw, 1.7rem); }
 .member-page-header .book-page-header-copy p { font-size: .76rem; }
@@ -4308,28 +4313,121 @@ tbody tr:hover {
   .system-settings-tab svg { width: .9rem; height: .9rem; }
 }
 
-.barcode-entry { display: grid; gap: .4rem; min-width: 0; }
-.barcode-entry > label { color: var(--academic-navy); font-size: .79rem; font-weight: 700; }
-.barcode-entry-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .55rem; align-items: stretch; min-width: 0; }
-.camera-scan-trigger { border: 1px solid var(--academic-border); border-radius: .55rem; padding: .65rem .8rem; background: #fff; color: var(--academic-navy); font-size: .74rem; font-weight: 800; white-space: nowrap; }
-.camera-scan-trigger:hover { border-color: var(--academic-red); color: var(--academic-red); }
-.camera-scan-trigger:focus-visible, .camera-scan-close:focus-visible { outline: 3px solid rgba(164, 0, 0, .24); outline-offset: 2px; }
-.camera-scan-dialog { display: grid; gap: .8rem; width: min(100%, 38rem); border: 1px solid #dce5e9; border-radius: 1rem; padding: clamp(1rem, 3vw, 1.5rem); background: #fff; box-shadow: 0 1rem 3rem rgba(0, 0, 0, .24); }
-.camera-scan-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
-.camera-scan-heading h2 { margin: .25rem 0 0; color: var(--academic-navy); font-size: 1.25rem; }
-.camera-scan-dialog > p { margin: 0; font-size: .78rem; line-height: 1.5; }
-.camera-scan-device-field { display: grid; gap: .35rem; color: var(--academic-navy); font-size: .75rem; font-weight: 700; }
-.camera-scan-device-field select { width: 100%; min-height: 2.7rem; border: 1px solid var(--academic-border); border-radius: .55rem; padding: .55rem .7rem; background: #fff; color: var(--academic-navy); font: inherit; font-size: .75rem; }
-.camera-scan-close { display: grid; flex: 0 0 auto; place-items: center; width: 2.25rem; height: 2.25rem; border: 1px solid var(--academic-border); border-radius: 50%; background: #fff; color: var(--academic-navy); font-size: 1.4rem; line-height: 1; }
-.camera-scan-preview { position: relative; display: grid; min-height: 13rem; place-items: center; overflow: hidden; border-radius: .75rem; background: #08141a; }
-.camera-scan-preview video { display: block; width: 100%; max-height: min(60vh, 26rem); object-fit: contain; }
-.camera-scan-guide { position: absolute; top: 50%; left: 8%; width: 84%; height: 28%; border: 2px solid rgba(255, 255, 255, .9); border-radius: .45rem; box-shadow: 0 0 0 999px rgba(0, 0, 0, .12); transform: translateY(-50%); pointer-events: none; }
-.camera-scan-status { min-height: 1.2rem; color: var(--academic-muted); font-size: .72rem; line-height: 1.45; }
-.camera-scan-status.inline-error { margin: 0; }
-.camera-scan-actions { display: flex; justify-content: flex-end; }
-.camera-scan-dialog > .form-helper { color: var(--academic-muted); font-size: .68rem; line-height: 1.45; }
-@media (max-width: 520px) {
-  .barcode-entry-controls { grid-template-columns: minmax(0, 1fr); }
-  .camera-scan-trigger { justify-self: start; }
-  .camera-scan-preview { min-height: 10rem; }
+/* Transactions: searchable, role-aware circulation history with compact details. */
+.transaction-toolbar {
+  display: grid;
+  grid-template-columns: minmax(17rem, 2fr) minmax(10rem, .8fr) minmax(10rem, .8fr);
+  align-items: end;
+  gap: .8rem;
+  margin-bottom: .9rem;
+}
+.transaction-toolbar .transaction-search { width: 100%; margin: 0; }
+.transaction-toolbar .transaction-search > span,
+.transaction-filter > span {
+  color: var(--academic-muted);
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.transaction-filter { display: grid; gap: .4rem; }
+.transaction-filter select {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.7rem;
+  border: 1px solid var(--academic-border);
+  border-radius: .55rem;
+  padding: .65rem .75rem;
+  background: #fff;
+  color: var(--academic-navy);
+  font: inherit;
+  font-size: .85rem;
+}
+.transaction-filter select:focus-visible,
+.transaction-details-toggle:focus-visible { outline: 3px solid rgba(159, 29, 45, .22); outline-offset: 2px; }
+.transaction-history-section .catalog-result-count { margin: .1rem 0 .6rem; }
+.transactions-table { min-width: 1040px; table-layout: fixed; }
+.transactions-table th:nth-child(1) { width: 15%; }
+.transactions-table th:nth-child(2) { width: 12%; }
+.transactions-table th:nth-child(3) { width: 17%; }
+.transactions-table th:nth-child(4) { width: 19%; }
+.transactions-table th:nth-child(5) { width: 20%; }
+.transactions-table th:nth-child(6) { width: 17%; }
+.transactions-table td:nth-child(3),
+.transactions-table td:nth-child(4) { white-space: normal; overflow-wrap: anywhere; }
+.transactions-table .table-subtext { white-space: normal; }
+.transaction-actor { display: grid; justify-items: start; gap: .24rem; }
+.transaction-actor-badge,
+.transaction-detail-status {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid #d9e1e8;
+  border-radius: 999px;
+  padding: .22rem .48rem;
+  background: #f4f7f9;
+  color: var(--academic-navy);
+  font-size: .63rem;
+  font-weight: 800;
+  line-height: 1.25;
+  white-space: normal;
+}
+.transaction-actor-badge[data-actor-type="administrator"] { border-color: #dfb4bb; background: #fff2f3; color: var(--academic-red-dark); }
+.transaction-actor-badge[data-actor-type="librarian"] { border-color: #c9d7e3; background: #f1f6fa; color: var(--academic-navy); }
+.transaction-actor-badge[data-actor-type="member_self_service"] { border-color: #d9d3f4; background: #f5f3ff; color: #51427d; }
+.transaction-actor-badge[data-actor-type="system_automated"] { border-color: #d7dce0; background: #f2f4f5; color: #58636b; }
+.transaction-details-toggle {
+  min-height: 2rem;
+  border: 1px solid #d8e0e5;
+  border-radius: .45rem;
+  padding: .4rem .6rem;
+  background: #fff;
+  color: var(--academic-navy);
+  font: inherit;
+  font-size: .72rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+.transaction-details-toggle:hover { border-color: #c9979d; background: #fff7f7; color: var(--academic-red-dark); }
+.transactions-table .transaction-expanded-row td {
+  max-width: none;
+  overflow: visible;
+  padding: .9rem 1rem;
+  background: #f8fafb;
+  white-space: normal;
+}
+.transaction-detail-panel {
+  border: 1px solid var(--academic-border);
+  border-left: 3px solid var(--academic-red);
+  border-radius: .6rem;
+  padding: .85rem .95rem .65rem;
+  background: #fff;
+}
+.transaction-detail-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .65rem .85rem; margin: 0; }
+.transaction-detail-field { min-width: 0; }
+.transaction-detail-field dt { margin-bottom: .18rem; color: var(--academic-muted); font-size: .65rem; font-weight: 800; letter-spacing: .025em; }
+.transaction-detail-field dd { margin: 0; color: var(--academic-navy); font-size: .75rem; line-height: 1.4; overflow-wrap: anywhere; }
+.transaction-detail-status { border-color: #d8e0e5; background: #f6f8f9; }
+.transaction-detail-status[data-status="returned"],
+.transaction-detail-status[data-status="completed"] { border-color: #c6dfd1; background: #f0f8f3; color: #286344; }
+.transaction-detail-status[data-status="overdue"],
+.transaction-detail-status[data-status="expired"],
+.transaction-detail-status[data-status="cancelled"],
+.transaction-detail-status[data-status="lost"],
+.transaction-detail-status[data-status="damaged"] { border-color: #e6c6a5; background: #fff8ee; color: #79500b; }
+.transaction-detail-note { margin: .75rem 0 0; color: var(--academic-muted); font-size: .64rem; }
+.transaction-pagination { margin-top: .8rem; }
+
+@media (max-width: 900px) {
+  .transaction-toolbar { grid-template-columns: minmax(0, 1fr) minmax(9rem, .6fr); }
+  .transaction-toolbar .transaction-search { grid-column: 1 / -1; }
+  .transaction-detail-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .transaction-toolbar { grid-template-columns: minmax(0, 1fr); }
+  .transaction-toolbar .transaction-search { grid-column: auto; }
+  .transaction-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem .65rem; }
+  .transactions-table .transaction-expanded-row td { padding: .65rem; }
+  .transaction-detail-panel { padding: .7rem; }
 }

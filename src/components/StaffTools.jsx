@@ -10,7 +10,6 @@ import { defaultCirculationPolicy, formatFine, normalizeCirculationPolicy } from
 import { ConfirmDialog } from './ConfirmDialog'
 import { getBookCategories } from '../lib/book-categories'
 import { SHELF_LOCATIONS } from '../lib/shelf-locations'
-import { CameraBarcodeScanner } from './CameraBarcodeScanner'
 
 const emptyBook = { title: '', author: '', isbn: '', category: '', course_subject: '', publication_year: '', description: '' }
 const emptyCopy = { book_id: '', barcode: '', location: '', condition: 'good' }
@@ -942,7 +941,6 @@ export function StaffCirculation({ onBack }) {
   const [loans, setLoans] = useState([])
   const [policy, setPolicy] = useState(defaultCirculationPolicy)
   const [memberQuery, setMemberQuery] = useState('')
-  const [copyQuery, setCopyQuery] = useState('')
   const [loanQuery, setLoanQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [barcode, setBarcode] = useState('')
@@ -968,7 +966,7 @@ export function StaffCirculation({ onBack }) {
         fetchAllRows(() => supabase.from('library_members').select('id, full_name, library_card_number, school_id, is_active, email_only').order('full_name')),
         fetchAllRows(() => supabase.from('book_copies').select('id, barcode, location, status, books(title)').in('status', ['available', 'reserved']).order('barcode')),
         fetchAllRows(() => supabase.from('loans').select('id, member_id, status, checked_out_at, due_at, fine_amount, book_copies(books(title), barcode), member:library_members!loans_member_id_fkey(full_name, library_card_number, school_id)').in('status', ['borrowed', 'overdue']).order('created_at', { ascending: false })),
-        fetchAllRows(() => supabase.from('reservations').select('id, member_id, copy_id').eq('status', 'ready_for_pickup')),
+        fetchAllRows(() => supabase.from('reservations').select('id, member_id, copy_id, pickup_confirmed_at').eq('status', 'ready_for_pickup').not('pickup_confirmed_at', 'is', null)),
         supabase.rpc('get_circulation_policy'),
       ])
       const failed = [membersResult, copiesResult, loansResult, reservationsResult, policyResult].find((result) => result.error)
@@ -1003,7 +1001,7 @@ export function StaffCirculation({ onBack }) {
         const { data: issued, error: receiptError } = await supabase.from('loans').select('id, due_at, fine_daily_rate').eq('id', loanId).single()
         setReceipt({ id: loanId, title: copies.find((item) => item.id === copyId)?.books?.title, barcode: copies.find((item) => item.id === copyId)?.barcode, member: borrower.full_name, card: borrower.library_card_number, emailOnly: borrower.email_only, due_at: issued?.due_at })
         if (receiptError) setMessage('Checkout completed. Receipt ID: ' + loanId + '; due date unavailable.')
-        setBarcode(''); setMemberId(''); setCopyId(''); setMemberQuery(''); setCopyQuery('')
+        setBarcode(''); setMemberId(''); setCopyId(''); setMemberQuery('')
         await loadData()
       }
     } catch (checkoutError) {
@@ -1057,12 +1055,11 @@ export function StaffCirculation({ onBack }) {
   const checkoutEligibleCopies = copies.filter((copy) => copy.status === 'available' || (
     copy.status === 'reserved' && selectedMember && readyReservations.some((reservation) => reservation.member_id === selectedMember.id && reservation.copy_id === copy.id)
   ))
-  const visibleCopies = checkoutEligibleCopies.filter((copy) => ((copy.books?.title || '') + ' ' + (copy.barcode || '') + ' ' + (copy.location || '') + ' ' + (copy.status || '')).toLowerCase().includes(copyQuery.trim().toLowerCase()))
+  const visibleCopies = checkoutEligibleCopies
   const scanCopy = (value) => {
     setBarcode(value)
     const match = checkoutEligibleCopies.find((copy) => copy.barcode?.trim().toLowerCase() === value.trim().toLowerCase())
     setCopyId(match?.id || '')
-    if (match) setCopyQuery('')
   }
   const memberReadiness = memberRecordCount === 0
     ? 'No library member records exist yet. Add or register a borrower in Management → Members before checkout.'
@@ -1087,13 +1084,12 @@ export function StaffCirculation({ onBack }) {
         <form className="tool-form checkout-form" onSubmit={checkout}>
           <h3>Check Out Book</h3>
           <label>Find member by name, card, or School ID<input type="search" value={memberQuery} onChange={(event) => { const value = event.target.value; setMemberQuery(value); const normalized = value.trim().toLowerCase(); const exact = members.filter((member) => member.is_active && [member.full_name, member.library_card_number, member.school_id].some((identity) => identity?.trim().toLowerCase() === normalized) && normalized); setMemberId(exact.length === 1 ? exact[0].id : ''); setCopyId(''); setBarcode('') }} onKeyDown={(event) => { if (event.key === 'Enter') event.preventDefault() }} placeholder="Name, card number, or School ID" />{normalizedMemberQuery && <small className="form-helper" role="status">{visibleMembers.length ? `${visibleMembers.length} matching member${visibleMembers.length === 1 ? '' : 's'}. Select one below.` : 'No members match. Check the name, card number, or School ID.'}</small>}</label>
-          <label>Member<select value={memberId} onChange={(event) => { setMemberId(event.target.value); setMemberQuery(''); setCopyId(''); setBarcode(''); setCopyQuery('') }} required><option value="">Select a registered member</option>{visibleMembers.map((member) => {
+          <label>Member<select value={memberId} onChange={(event) => { setMemberId(event.target.value); setMemberQuery(''); setCopyId(''); setBarcode('') }} required><option value="">Select a registered member</option>{visibleMembers.map((member) => {
             const identity = member.library_card_number || (member.school_id ? `ID ${member.school_id}` : member.email_only ? 'Email account' : 'Registered account')
             return <option key={member.id} value={member.id} disabled={!member.is_active}>{member.full_name} · {identity}{!member.is_active ? ' · Inactive' : ''}</option>
           })}</select></label>
-          <label>Search books and copies<input type="search" value={copyQuery} onChange={(event) => { setCopyQuery(event.target.value); const match = checkoutEligibleCopies.find((copy) => copy.barcode?.trim().toLowerCase() === event.target.value.trim().toLowerCase()); setCopyId(match?.id || '') }} placeholder="Title, barcode, or shelf" />{copyQuery.trim() && <small className="form-helper" role="status">{visibleCopies.length ? `${visibleCopies.length} matching cop${visibleCopies.length === 1 ? 'y' : 'ies'}. Choose one from Book / copy below.` : `No available or assigned copies match “${copyQuery.trim()}”. Try a title, barcode, or shelf.`}</small>}</label>
-          <label>Book / copy<select value={copyId} onChange={(event) => { const selected = copies.find((item) => item.id === event.target.value); setCopyId(event.target.value); setBarcode(selected?.barcode || ''); setCopyQuery('') }} required><option value="">Select available copy or assigned hold</option>{visibleCopies.map((copy) => <option key={copy.id} value={copy.id}>{copy.books?.title || 'Unknown book'} · {copy.barcode} · {copy.status}</option>)}</select></label>
-          <div className="barcode-entry"><label htmlFor="checkout-copy-barcode">Scan or enter copy barcode</label><div className="barcode-entry-controls"><input id="checkout-copy-barcode" value={barcode} onChange={(event) => scanCopy(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !memberId) event.preventDefault() }} placeholder="Barcode from the physical copy" /><CameraBarcodeScanner onScan={scanCopy} /></div></div>
+          <label>Book / copy<select value={copyId} onChange={(event) => { const selected = copies.find((item) => item.id === event.target.value); setCopyId(event.target.value); setBarcode(selected?.barcode || '') }} required><option value="">Select available copy or assigned hold</option>{visibleCopies.map((copy) => <option key={copy.id} value={copy.id}>{copy.books?.title || 'Unknown book'} · {copy.barcode} · {copy.status}</option>)}</select></label>
+          <label>Enter copy barcode<input value={barcode} onChange={(event) => scanCopy(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !memberId) event.preventDefault() }} placeholder="Type the barcode from the physical copy" /></label>
           {barcode && !copyId && <p className="circulation-validation" role="status">No available or reserved copy matches this barcode.</p>}
           {selectedMember && <div className="circulation-selection-card"><strong>Borrower</strong><span>{selectedMember.full_name}</span><small>{selectedMember.email_only ? 'Email-confirmed registered account' : selectedMember.library_card_number ? `Registered member · card ${selectedMember.library_card_number}` : 'Registered library member'}{selectedMember.school_id ? ' · School ID ' + selectedMember.school_id : ''}</small><small>Open loans · {memberOpenLoans} of {policy.max_active_loans}</small></div>}
           {selectedCopy && <div className="circulation-selection-card"><strong>Selected copy</strong><span>{selectedCopy.books?.title || 'Unknown book'}</span><small>Barcode · {selectedCopy.barcode} · {selectedCopy.location || 'Shelf not recorded'}</small><small>Copy status · {selectedCopy.status}</small></div>}
@@ -1107,7 +1103,7 @@ export function StaffCirculation({ onBack }) {
         </form>
         <form className="tool-form return-form" onSubmit={(event) => { event.preventDefault(); if (matchingReturnLoan) void returnLoan(matchingReturnLoan.id); else setError('No active checkout matches this barcode.') }}>
           <div><h3>Return Book</h3><p className="muted">Scan or enter the barcode after receiving the physical copy.</p></div>
-          <div className="barcode-entry"><label htmlFor="return-copy-barcode">Copy barcode</label><div className="barcode-entry-controls"><input id="return-copy-barcode" value={returnBarcode} onChange={(event) => { setReturnBarcode(event.target.value); setError('') }} placeholder="Scan or type barcode" required /><CameraBarcodeScanner onScan={(value) => { setReturnBarcode(value); setError('') }} /></div></div>
+          <label>Copy barcode<input value={returnBarcode} onChange={(event) => { setReturnBarcode(event.target.value); setError('') }} placeholder="Type the copy barcode" required /></label>
           {matchingReturnLoan && <div className="circulation-selection-card"><strong>Active checkout found</strong><span>{matchingReturnLoan.book_copies?.books?.title || 'Unknown book'}</span><small>{matchingReturnLoan.member?.full_name || 'Unknown borrower'} · Due {formatCirculationDate(matchingReturnLoan.due_at)}</small></div>}
           {returnBarcode && !matchingReturnLoan && <p className="circulation-validation" role="status">No open loan matches this barcode. Check the barcode and confirm the copy has not already been returned.</p>}
           <button className="primary-button" disabled={saving || loading || !returnBarcode.trim()}>{saving ? 'Processing return…' : 'Return scanned copy'}</button>
